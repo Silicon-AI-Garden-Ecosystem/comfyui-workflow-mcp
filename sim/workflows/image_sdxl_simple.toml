@@ -1,0 +1,33 @@
+description = "Simple Text-to-Image Generation with SDXL"
+
+[params.prompt]
+description = "Positive prompt"
+target = ["10", "inputs", "text"]
+type = "string"
+
+[params.negative_prompt]
+description = "Negative prompt"
+target = ["11", "inputs", "text"]
+type = "string"
+default = ""
+
+[params.width]
+description = "Image width, must be a multiple of 8"
+target = ["13", "inputs", "width"]
+type = "integer"
+default = 1024
+range = [512, 1536]
+
+[params.height]
+description = "Image height, must be a multiple of 8"
+target = ["13", "inputs", "height"]
+type = "integer"
+default = 1024
+range = [256, 1536]
+
+[params.seed]
+description = "Seed"
+target = ["12", "inputs", "seed"]
+type = "integer"
+default = "random"
+range = [0, 9007199254740991]

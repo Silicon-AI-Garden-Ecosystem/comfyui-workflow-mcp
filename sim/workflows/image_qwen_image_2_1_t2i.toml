@@ -1,0 +1,42 @@
+description = "Simple Text-to-Image Generation with Qwen Image 2.1"
+
+[params.prompt]
+description = "Positive prompt"
+target = ["459:474", "inputs", "on_false"]
+type = "string"
+
+[params.negative_prompt]
+description = "Negative prompt"
+target = ["459:452", "inputs", "negative_prompt"]
+type = "string"
+default = ""
+
+[params.aspect_ratio]
+description = "Image aspect ratio"
+target = ["13", "inputs", "aspect_ratio"]
+type = "string"
+default = "1:1 (Square)"
+enum = [
+  "1:1 (Square)",
+  "2:3 (Portrait Photo)",
+  "3:2 (Photo)",
+  "3:4 (Portrait Standard)",
+  "4:3 (Standard)",
+  "9:16 (Portrait Widescreen)",
+  "16:9 (Widescreen)",
+  "21:9 (Ultrawide)",
+]
+
+[params.megapixels]
+description = "Image megapixels"
+target = ["13", "inputs", "megapixels"]
+type = "float"
+default = 1.0
+range = [1.0, 4.0]
+
+[params.seed]
+description = "Seed"
+target = ["459:458", "inputs", "seed"]
+type = "integer"
+default = "random"
+range = [0, 9007199254740991]

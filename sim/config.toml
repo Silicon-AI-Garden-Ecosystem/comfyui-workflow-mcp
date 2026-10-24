@@ -1,0 +1,23 @@
+# Built-in defaults + format contract.
+# If a key is missing from the user's config.toml, use the value here.
+
+# Must be one of trace/debug/info/warn/error
+log_level        = "info"
+
+# ${XDG_*} is expanded, falling back to the ~/.local/... default when the variable is unset.
+# Relative paths in a user config resolve against the directory of the file that declares them.
+[paths]
+env_file         = "${XDG_DATA_HOME:-~/.local/share}/comfyui-workflow-mcp/.env"
+logs_dir         = "${XDG_STATE_HOME:-~/.local/state}/comfyui-workflow-mcp/logs"
+output_dir       = "${XDG_CACHE_HOME:-~/.cache}/comfyui-workflow-mcp/output"
+workflows_dir    = "${XDG_DATA_HOME:-~/.local/share}/comfyui-workflow-mcp/workflows"
+
+[timings]
+timeout_seconds  = 300
+poll_interval_ms = 1000
+
+[descriptions]
+search_tool      = "Without `name`, list the available ComfyUI workflows and return a [{name, description}] list. With `name`, show that workflow's parameters (a parameter that has a `default` field is optional)."
+run_tool         = "Run a ComfyUI workflow and return the absolute path of the directory where this run's outputs are stored (one directory per run). For the `name` value and the `params` fields, see the result of `workflow_search(name)`. Optionally pass `output_path` to choose where the outputs are stored."
+name_arg         = "Workflow name, must match the original exactly and is case-sensitive."
+output_path_arg  = "Optional root directory for this run's output; must be absolute or start with ~/. The run still goes into a per-run subdirectory below it."
