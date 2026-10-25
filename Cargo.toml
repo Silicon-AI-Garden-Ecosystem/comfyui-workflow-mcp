@@ -5,6 +5,50 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
+# MCP protocol.
+# rmcp's `server` feature already turns on `schemars`, and rmcp 3.7 pins schemars ^1:
+# never depend on schemars directly,
+# a second line with 0.8 would give us two JsonSchema traits.
+reqwest = { version = "0.13", default-features = false, features = [
+  "json",
+  "query",
+  "rustls-no-provider",
+] }
+rmcp = { version = "3.7", default-features = false, features = [
+  "macros",
+  "server",
+  "transport-io",
+] }
+# Only to give reqwest's rustls a crypto backend:
+# ring needs no cmake/perl (aws-lc-rs does).
+rustls = { version = "0.23", default-features = false, features = [
+  "ring",
+  "std",
+  "tls12",
+] }
+serde = { version = "1", features = [
+  "derive",
+] }
+# Never enable preserve_order:
+# parameter overrides rely on the stable order of BTreeMap.
+serde_json = "1"
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "time",
+] }
+# `display` is off: we parse and merge TOML, we never format it.
+toml = { version = "1", default-features = false, features = [
+  "std",
+  "serde",
+  "parse",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+  "fmt",
+] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.dev]
 opt-level = 1
