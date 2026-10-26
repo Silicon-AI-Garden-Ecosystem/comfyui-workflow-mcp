@@ -16,11 +16,12 @@ use crate::config::{self, Descriptions};
 use crate::core::comfy::Client;
 use crate::core::execution;
 
-use super::{Server, args_schema, fail, text, unknown};
+use super::{Server, args_schema, fail, text, unknown_host, unknown_workflow};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct RunArgs {
-    name: String,
+    host_name: String,
+    workflow_name: String,
     #[serde(default)]
     params: Option<Map<String, Json>>,
     #[serde(default)]
@@ -39,13 +40,20 @@ impl Server {
             Err(err) => return Ok(fail(err)),
         };
 
-        let Some(workflow) = loaded.workflows.get(&args.name) else {
-            return Ok(fail(unknown(&loaded.workflows, &args.name)));
+        let Some(host) = loaded.workflows.host(&args.host_name) else {
+            return Ok(fail(unknown_host(&loaded.workflows, &args.host_name)));
+        };
+        let Some(workflow) = loaded.workflows.get(&args.host_name, &args.workflow_name) else {
+            return Ok(fail(unknown_workflow(
+                &loaded.workflows,
+                &args.host_name,
+                &args.workflow_name,
+            )));
         };
 
         // The TLS backend follows the URL scheme, so the client is rebuilt with the
         // configuration: a run takes tens of seconds, which makes this negligible.
-        let client = match Client::new(&loaded.env.base_url) {
+        let client = match Client::new(&host.base_url) {
             Ok(client) => client,
             Err(err) => return Ok(fail(err.to_string())),
         };
@@ -62,7 +70,7 @@ impl Server {
         let timeout = Duration::from_secs(loaded.setting.timings.timeout_seconds);
         let poll_interval = Duration::from_millis(loaded.setting.timings.poll_interval_ms);
 
-        tracing::info!(workflow = %workflow.name, "run");
+        tracing::info!(host = %workflow.host, workflow = %workflow.name, "run");
         match execution::execute(
             &client,
             workflow,
@@ -84,7 +92,8 @@ pub(super) fn tool(descriptions: &Descriptions) -> Tool {
         "run",
         descriptions.run_tool.clone(),
         args_schema::<RunArgs>(&[
-            ("name", &descriptions.name_arg),
+            ("host_name", &descriptions.host_name_arg),
+            ("workflow_name", &descriptions.workflow_name_arg),
             ("output_path", &descriptions.output_path_arg),
         ]),
     )

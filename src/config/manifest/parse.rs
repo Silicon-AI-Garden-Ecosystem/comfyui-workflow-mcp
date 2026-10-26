@@ -643,7 +643,7 @@ mod tests {
     #[test]
     fn a_hook_is_parsed_from_the_sample() {
         let m = parse(include_str!(
-            "../../../sim/workflows/image_qwen_image_2_1_image_edit.toml"
+            "../../../sim/workflows/local/image_qwen_image_2_1_image_edit.toml"
         ))
         .unwrap();
         let image2 = &m.params["image_2"];

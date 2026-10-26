@@ -1,6 +1,8 @@
-//! The workflow set is the content of one directory, rescanned on every tool call: an agent
-//! may hold a server for a whole session, so a workflow added minutes ago must work without a
-//! restart. A name is a file name: what the file manager shows is what the model passes.
+//! The workflow set is the content of one directory per host, rescanned on every tool call:
+//! an agent may hold a server for a whole session, so a workflow added minutes ago must work
+//! without a restart. A name is a file name: what the file manager shows is what the model
+//! passes. Hosts come from `env.toml`, so a directory whose name is not a host is reported
+//! instead of being silently ignored.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -10,12 +12,15 @@ use serde_json::Value as Json;
 
 use crate::core::error::LoadError;
 
+use super::Host;
 use super::manifest::Manifest;
+use super::validate_name;
 
 /// A workflow is `<name>.json` plus `<name>.toml`: the JSON stays as ComfyUI exports it,
 /// the TOML is the parameter contract.
 #[derive(Debug, Clone)]
 pub struct Workflow {
+    pub host: String,
     pub name: String,
     pub description: String,
     pub manifest: Manifest,
@@ -26,24 +31,45 @@ pub struct Workflow {
 
 #[derive(Debug, Clone, Default)]
 pub struct Workflows {
+    hosts: Vec<Host>,
     workflows: Vec<Workflow>,
-    by_name: BTreeMap<String, usize>,
+    by_key: BTreeMap<(String, String), usize>,
     broken: Vec<LoadError>,
 }
 
 impl Workflows {
+    pub fn hosts(&self) -> &[Host] {
+        &self.hosts
+    }
+
+    pub fn host(&self, name: &str) -> Option<&Host> {
+        self.hosts.iter().find(|host| host.name == name)
+    }
+
+    pub fn of_host(&self, host: &str) -> Vec<&Workflow> {
+        self.workflows
+            .iter()
+            .filter(|workflow| workflow.host == host)
+            .collect()
+    }
+
+    /// Exact lookup on both names: the model repeats what it was shown, so a fuzzy match would
+    /// quietly run a different workflow -- or the same workflow on the wrong host.
+    pub fn get(&self, host: &str, name: &str) -> Option<&Workflow> {
+        self.by_key
+            .get(&(host.to_string(), name.to_string()))
+            .map(|index| &self.workflows[*index])
+    }
+
+    pub fn names_of(&self, host: &str) -> Vec<String> {
+        self.of_host(host)
+            .into_iter()
+            .map(|workflow| workflow.name.clone())
+            .collect()
+    }
+
     pub fn all(&self) -> &[Workflow] {
         &self.workflows
-    }
-
-    /// Exact name lookup: the model repeats the name it was shown, so a fuzzy match would
-    /// quietly run a different workflow.
-    pub fn get(&self, name: &str) -> Option<&Workflow> {
-        self.by_name.get(name).map(|i| &self.workflows[*i])
-    }
-
-    pub fn names(&self) -> Vec<String> {
-        self.by_name.keys().cloned().collect()
     }
 
     pub fn len(&self) -> usize {
@@ -60,29 +86,124 @@ impl Workflows {
     }
 }
 
-pub fn load(dir: &Path) -> Workflows {
-    let mut workflows = Workflows::default();
+pub fn load(dir: &Path, hosts: &[Host]) -> Workflows {
+    let mut workflows = Workflows {
+        hosts: hosts.to_vec(),
+        ..Workflows::default()
+    };
 
-    let (jsons, errors) = pairs(dir);
-    workflows.broken.extend(errors);
-    for json in jsons {
-        match load_pair(&json) {
-            Ok(workflow) => workflows.workflows.push(workflow),
-            Err(mut errs) => workflows.broken.append(&mut errs),
+    if let Err(error) = scan_root(dir, hosts, &mut workflows.broken) {
+        workflows.broken.push(error);
+        return workflows;
+    }
+
+    let order: BTreeMap<&str, usize> = hosts
+        .iter()
+        .enumerate()
+        .map(|(index, host)| (host.name.as_str(), index))
+        .collect();
+
+    for host in hosts {
+        let (jsons, errors) = pairs(&dir.join(&host.name));
+        workflows.broken.extend(errors);
+        for json in jsons {
+            match load_pair(&json, &host.name) {
+                Ok(workflow) => workflows.workflows.push(workflow),
+                Err(mut errs) => workflows.broken.append(&mut errs),
+            }
         }
     }
 
-    workflows
-        .workflows
-        .sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
+    workflows.workflows.sort_by(|a, b| {
+        order
+            .get(a.host.as_str())
+            .cmp(&order.get(b.host.as_str()))
+            .then_with(|| a.name.as_bytes().cmp(b.name.as_bytes()))
+    });
     for (index, workflow) in workflows.workflows.iter().enumerate() {
-        workflows.by_name.insert(workflow.name.clone(), index);
+        workflows
+            .by_key
+            .insert((workflow.host.clone(), workflow.name.clone()), index);
     }
     workflows
 }
 
-/// A missing directory is an empty set, not a failure: the default points at a directory that
-/// may not exist yet. An unreadable path is a broken entry, and so is a half pair.
+/// Workflows live under `<workflows_dir>/<host>/`, so anything else at the top level is a
+/// layout mistake worth reporting: a flat `workflows/foo.json` would otherwise look like
+/// "my workflow disappeared" with no hint why.
+fn scan_root(dir: &Path, hosts: &[Host], broken: &mut Vec<LoadError>) -> Result<(), LoadError> {
+    let at = LoadError::at_file(dir);
+    let metadata = match fs::metadata(dir) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(LoadError::new(
+                &at,
+                format!("failed to read the workflows directory: {err}"),
+            ));
+        }
+    };
+    if !metadata.is_dir() {
+        return Err(LoadError::new(&at, "workflows root is not a directory"));
+    }
+
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) => {
+            return Err(LoadError::new(
+                &at,
+                format!("failed to read the workflows directory: {err}"),
+            ));
+        }
+    };
+
+    let known: std::collections::BTreeSet<&str> =
+        hosts.iter().map(|host| host.name.as_str()).collect();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                broken.push(LoadError::new(
+                    &at,
+                    format!("failed to read a directory entry: {err}"),
+                ));
+                continue;
+            }
+        };
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        match fs::metadata(&path) {
+            Ok(meta) if meta.is_dir() => {
+                if !known.contains(name.as_ref()) {
+                    broken.push(LoadError::new(
+                        LoadError::at_file(&path),
+                        format!("no host named {name:?} in env.toml: workflows live in <host>/"),
+                    ));
+                }
+            }
+            Ok(meta) if meta.is_file() => {
+                if matches!(
+                    path.extension().and_then(|ext| ext.to_str()),
+                    Some("json" | "toml")
+                ) {
+                    broken.push(LoadError::new(
+                        LoadError::at_file(&path),
+                        "workflow files must live in <workflows_dir>/<host>/",
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// A missing directory is an empty set, not a failure: a host may not have any workflow yet.
+/// An unreadable path is a broken entry, and so is a half pair.
 fn pairs(dir: &Path) -> (Vec<PathBuf>, Vec<LoadError>) {
     let at = LoadError::at_file(dir);
     let metadata = match fs::metadata(dir) {
@@ -101,7 +222,7 @@ fn pairs(dir: &Path) -> (Vec<PathBuf>, Vec<LoadError>) {
     if !metadata.is_dir() {
         return (
             Vec::new(),
-            vec![LoadError::new(&at, "workflows root is not a directory")],
+            vec![LoadError::new(&at, "host directory is not a directory")],
         );
     }
 
@@ -193,7 +314,7 @@ fn pairs(dir: &Path) -> (Vec<PathBuf>, Vec<LoadError>) {
 }
 
 /// All errors are collected, so one broken pair reports everything wrong with it at once.
-fn load_pair(json_path: &Path) -> Result<Workflow, Vec<LoadError>> {
+fn load_pair(json_path: &Path, host: &str) -> Result<Workflow, Vec<LoadError>> {
     let at = LoadError::at_file(json_path);
     let toml_path = json_path.with_extension("toml");
     let mut errors = Vec::new();
@@ -207,7 +328,7 @@ fn load_pair(json_path: &Path) -> Result<Workflow, Vec<LoadError>> {
             None
         }
         Some(stem) => {
-            if let Err(message) = validate_name(stem) {
+            if let Err(message) = validate_name("workflow", stem) {
                 errors.push(LoadError::new(&at, message));
             }
             Some(stem.to_string())
@@ -276,39 +397,13 @@ fn load_pair(json_path: &Path) -> Result<Workflow, Vec<LoadError>> {
     let json = json.expect("the JSON is parsed when there are no errors");
     let name = name.expect("the file name exists when there are no errors");
     Ok(Workflow {
+        host: host.to_string(),
         name,
         description: manifest.description.clone(),
         manifest,
         json,
         path: json_path.to_path_buf(),
     })
-}
-
-/// A name must be a single path component, even though it is never used to build one: the
-/// path comes from the scan, so a hostile name can only miss, never escape the directory.
-fn validate_name(name: &str) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("workflow name is empty".to_string());
-    }
-    if name == "." || name == ".." {
-        return Err("workflow name must not be \".\" or \"..\"".to_string());
-    }
-    if name.contains('/') {
-        return Err("workflow name must not contain \"/\"".to_string());
-    }
-    if name.contains('\0') {
-        return Err("workflow name must not contain NUL".to_string());
-    }
-    if name.chars().any(|c| c.is_control()) {
-        return Err("workflow name must not contain control characters".to_string());
-    }
-    if name.trim() != name {
-        return Err("workflow name must not have leading or trailing whitespace".to_string());
-    }
-    if name.len() > 255 {
-        return Err("workflow name exceeds 255 bytes".to_string());
-    }
-    Ok(())
 }
 
 fn file_name(path: &Path) -> Vec<u8> {
@@ -346,10 +441,31 @@ range = [0, 9007199254740991]
 "#
     }
 
+    fn hosts(names: &[&str]) -> Vec<Host> {
+        names
+            .iter()
+            .map(|name| Host {
+                name: name.to_string(),
+                description: format!("{name} endpoint"),
+                base_url: "http://127.0.0.1:8188".to_string(),
+            })
+            .collect()
+    }
+
+    fn host_dir(root: &Path, host: &str) -> PathBuf {
+        let dir = root.join(host);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     fn make(root: &Path, name: &str) -> PathBuf {
-        let json = root.join(format!("{name}.json"));
+        make_in(&host_dir(root, "local"), name)
+    }
+
+    fn make_in(dir: &Path, name: &str) -> PathBuf {
+        let json = dir.join(format!("{name}.json"));
         fs::write(&json, TEMPLATE).unwrap();
-        fs::write(root.join(format!("{name}.toml")), toml_for()).unwrap();
+        fs::write(dir.join(format!("{name}.toml")), toml_for()).unwrap();
         json
     }
 
@@ -357,8 +473,11 @@ range = [0, 9007199254740991]
     fn loads_a_valid_pair() {
         let root = TempDir::new().unwrap();
         let json = make(root.path(), "sdxl_portrait");
-        let workflows = load(root.path());
-        let workflow = workflows.get("sdxl_portrait").unwrap();
+
+        let workflows = load(root.path(), &hosts(&["local"]));
+
+        let workflow = workflows.get("local", "sdxl_portrait").unwrap();
+        assert_eq!(workflow.host, "local");
         assert_eq!(workflow.name, "sdxl_portrait");
         assert_eq!(workflow.description, "test workflow");
         assert_eq!(workflow.path, json);
@@ -371,13 +490,14 @@ range = [0, 9007199254740991]
     #[test]
     fn a_broken_pair_is_left_out_but_the_others_still_load() {
         let root = TempDir::new().unwrap();
-        make(root.path(), "good");
-        fs::write(root.path().join("bad.json"), "{\n  \"a\": ,\n}").unwrap();
-        fs::write(root.path().join("bad.toml"), toml_for()).unwrap();
+        let dir = host_dir(root.path(), "local");
+        make_in(&dir, "good");
+        fs::write(dir.join("bad.json"), "{\n  \"a\": ,\n}").unwrap();
+        fs::write(dir.join("bad.toml"), toml_for()).unwrap();
 
-        let workflows = load(root.path());
+        let workflows = load(root.path(), &hosts(&["local"]));
 
-        assert_eq!(workflows.names(), ["good"]);
+        assert_eq!(workflows.names_of("local"), ["good"]);
         assert_eq!(workflows.broken().len(), 1, "{:?}", workflows.broken());
         assert!(
             workflows.broken()[0].message.contains("JSON"),
@@ -387,9 +507,10 @@ range = [0, 9007199254740991]
 
         // Every workflow broken is not a failure either: there is simply nothing to find.
         let all_broken = TempDir::new().unwrap();
-        fs::write(all_broken.path().join("bad.json"), b"not json").unwrap();
-        fs::write(all_broken.path().join("bad.toml"), b"also not toml").unwrap();
-        let workflows = load(all_broken.path());
+        let dir = host_dir(all_broken.path(), "local");
+        fs::write(dir.join("bad.json"), b"not json").unwrap();
+        fs::write(dir.join("bad.toml"), b"also not toml").unwrap();
+        let workflows = load(all_broken.path(), &hosts(&["local"]));
         assert!(workflows.is_empty());
         assert!(!workflows.broken().is_empty());
     }
@@ -397,10 +518,11 @@ range = [0, 9007199254740991]
     #[test]
     fn missing_toml_is_reported() {
         let root = TempDir::new().unwrap();
-        let json = root.path().join("wf.json");
+        let dir = host_dir(root.path(), "local");
+        let json = dir.join("wf.json");
         fs::write(&json, TEMPLATE).unwrap();
 
-        let workflows = load(root.path());
+        let workflows = load(root.path(), &hosts(&["local"]));
 
         assert!(workflows.is_empty());
         assert_eq!(workflows.broken().len(), 1, "{:?}", workflows.broken());
@@ -415,35 +537,36 @@ range = [0, 9007199254740991]
     fn other_files_next_to_the_pair_are_ignored() {
         let root = TempDir::new().unwrap();
         make(root.path(), "wf");
-        fs::write(root.path().join("README.md"), "hi").unwrap();
-        fs::write(root.path().join("preview.png"), b"png").unwrap();
-        assert_eq!(load(root.path()).names(), ["wf"]);
+        let dir = host_dir(root.path(), "local");
+        fs::write(dir.join("README.md"), "hi").unwrap();
+        fs::write(dir.join("preview.png"), b"png").unwrap();
+
+        assert_eq!(
+            load(root.path(), &hosts(&["local"])).names_of("local"),
+            ["wf"]
+        );
     }
 
     #[test]
     fn validate_name_rejects_slash_control_and_padding() {
-        assert!(validate_name("a/b").is_err());
-        assert!(validate_name("a\nb").is_err());
-        assert!(validate_name("a\rb").is_err());
-        assert!(validate_name(" a").is_err());
-        assert!(validate_name("a ").is_err());
-        assert!(validate_name("").is_err());
-        assert!(validate_name(".").is_err());
-        assert!(validate_name("..").is_err());
+        for bad in ["a/b", "a\nb", "a\rb", " a", "a ", "", ".", ".."] {
+            assert!(validate_name("workflow", bad).is_err(), "{bad:?}");
+        }
         // Allowed: a name may be anything a file manager can show, because the contract is the file name.
         for ok in ["naïve name", "a b", "🎨", "UPPER", "-dash"] {
-            assert!(validate_name(ok).is_ok(), "{ok}");
+            assert!(validate_name("workflow", ok).is_ok(), "{ok}");
         }
     }
 
     #[test]
     fn broken_json_has_line_number() {
         let root = TempDir::new().unwrap();
-        let json = root.path().join("wf.json");
+        let dir = host_dir(root.path(), "local");
+        let json = dir.join("wf.json");
         fs::write(&json, "{\n  \"a\": ,\n}").unwrap();
-        fs::write(root.path().join("wf.toml"), toml_for()).unwrap();
+        fs::write(dir.join("wf.toml"), toml_for()).unwrap();
 
-        let errors = load_pair(&json).unwrap_err();
+        let errors = load_pair(&json, "local").unwrap_err();
         let err = errors
             .iter()
             .find(|e| e.message.contains("JSON"))
@@ -455,11 +578,12 @@ range = [0, 9007199254740991]
     #[test]
     fn broken_toml_reports_line() {
         let root = TempDir::new().unwrap();
-        let json = root.path().join("wf.json");
+        let dir = host_dir(root.path(), "local");
+        let json = dir.join("wf.json");
         fs::write(&json, TEMPLATE).unwrap();
-        fs::write(root.path().join("wf.toml"), "[params.x]\ntarget = [\n").unwrap();
+        fs::write(dir.join("wf.toml"), "[params.x]\ntarget = [\n").unwrap();
 
-        let errors = load_pair(&json).unwrap_err();
+        let errors = load_pair(&json, "local").unwrap_err();
         assert!(
             errors
                 .iter()
@@ -471,10 +595,11 @@ range = [0, 9007199254740991]
     #[test]
     fn missing_target_reports_toml_line() {
         let root = TempDir::new().unwrap();
-        let json = root.path().join("wf.json");
+        let dir = host_dir(root.path(), "local");
+        let json = dir.join("wf.json");
         fs::write(&json, TEMPLATE).unwrap();
         fs::write(
-            root.path().join("wf.toml"),
+            dir.join("wf.toml"),
             r#"
 description = "d"
 
@@ -485,7 +610,7 @@ type = "string"
         )
         .unwrap();
 
-        let errors = load_pair(&json).unwrap_err();
+        let errors = load_pair(&json, "local").unwrap_err();
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].at.contains("wf.toml"), "{errors:?}");
         assert!(
@@ -501,27 +626,90 @@ type = "string"
             make(root.path(), name);
         }
 
-        let workflows = load(root.path());
+        let workflows = load(root.path(), &hosts(&["local"]));
 
         assert_eq!(workflows.len(), 4);
-        let names: Vec<&str> = workflows.all().iter().map(|w| w.name.as_str()).collect();
+        let names = workflows.names_of("local");
         assert_eq!(names, ["Beta", "alpha", "zeta", "Ünicode"]);
-        assert_eq!(workflows.names(), names);
-        assert!(workflows.get("alpha").is_some());
-        assert!(workflows.get("nope").is_none());
+        assert!(workflows.get("local", "alpha").is_some());
+        assert!(workflows.get("local", "nope").is_none());
         assert!(!workflows.is_empty());
+    }
+
+    #[test]
+    fn the_same_name_can_exist_on_two_hosts() {
+        let root = TempDir::new().unwrap();
+        make_in(&host_dir(root.path(), "local"), "wf");
+        make_in(&host_dir(root.path(), "gpu"), "wf");
+
+        let workflows = load(root.path(), &hosts(&["local", "gpu"]));
+
+        assert_eq!(workflows.len(), 2);
+        assert_eq!(workflows.get("local", "wf").unwrap().host, "local");
+        assert_eq!(workflows.get("gpu", "wf").unwrap().host, "gpu");
+        assert_eq!(workflows.names_of("local"), ["wf"]);
+    }
+
+    #[test]
+    fn a_host_without_a_directory_has_no_workflows() {
+        let root = TempDir::new().unwrap();
+
+        let workflows = load(root.path(), &hosts(&["local"]));
+
+        assert!(workflows.is_empty());
+        assert!(workflows.broken().is_empty());
+        assert!(workflows.host("local").is_some());
+    }
+
+    #[test]
+    fn a_directory_that_is_not_a_host_is_reported() {
+        let root = TempDir::new().unwrap();
+        make(root.path(), "wf");
+        host_dir(root.path(), "stray");
+
+        let workflows = load(root.path(), &hosts(&["local"]));
+
+        assert_eq!(workflows.names_of("local"), ["wf"]);
+        assert_eq!(workflows.broken().len(), 1, "{:?}", workflows.broken());
+        assert!(
+            workflows.broken()[0]
+                .message
+                .contains("no host named \"stray\""),
+            "{:?}",
+            workflows.broken()
+        );
+    }
+
+    #[test]
+    fn a_flat_pair_at_the_root_is_reported() {
+        let root = TempDir::new().unwrap();
+        fs::write(root.path().join("flat.json"), TEMPLATE).unwrap();
+        fs::write(root.path().join("flat.toml"), toml_for()).unwrap();
+
+        let workflows = load(root.path(), &hosts(&["local"]));
+
+        assert!(workflows.is_empty());
+        assert!(
+            workflows
+                .broken()
+                .iter()
+                .any(|e| e.message.contains("<host>")),
+            "{:?}",
+            workflows.broken()
+        );
     }
 
     #[test]
     fn unpaired_files_are_reported() {
         let root = TempDir::new().unwrap();
-        fs::write(root.path().join("one.json"), TEMPLATE).unwrap();
-        fs::write(root.path().join("two.toml"), toml_for()).unwrap();
-        make(root.path(), "good");
+        let dir = host_dir(root.path(), "local");
+        fs::write(dir.join("one.json"), TEMPLATE).unwrap();
+        fs::write(dir.join("two.toml"), toml_for()).unwrap();
+        make_in(&dir, "good");
 
-        let workflows = load(root.path());
+        let workflows = load(root.path(), &hosts(&["local"]));
 
-        assert_eq!(workflows.names(), ["good"]);
+        assert_eq!(workflows.names_of("local"), ["good"]);
         assert_eq!(workflows.broken().len(), 2, "{:?}", workflows.broken());
         assert!(
             workflows
@@ -544,18 +732,24 @@ type = "string"
     #[test]
     fn hidden_files_are_skipped() {
         let root = TempDir::new().unwrap();
-        make(root.path(), "visible");
+        let dir = host_dir(root.path(), "local");
+        make_in(&dir, "visible");
+        fs::write(dir.join(".hidden.json"), b"{}").unwrap();
+        fs::write(dir.join(".DS_Store"), b"junk").unwrap();
         fs::write(root.path().join(".hidden.json"), b"{}").unwrap();
-        fs::write(root.path().join(".DS_Store"), b"junk").unwrap();
 
-        assert_eq!(load(root.path()).names(), ["visible"]);
+        let workflows = load(root.path(), &hosts(&["local"]));
+
+        assert_eq!(workflows.names_of("local"), ["visible"]);
+        assert!(workflows.broken().is_empty(), "{:?}", workflows.broken());
     }
 
     #[test]
     fn missing_root_is_empty_not_error() {
         let root = TempDir::new().unwrap();
         // The default config points at a directory that does not exist yet: 0 workflows, not a failure.
-        let workflows = load(&root.path().join("nope"));
+        let workflows = load(&root.path().join("nope"), &hosts(&["local"]));
+
         assert!(workflows.is_empty());
         assert!(workflows.broken().is_empty());
     }
@@ -566,7 +760,7 @@ type = "string"
         let file = root.path().join("file");
         fs::write(&file, b"x").unwrap();
 
-        let workflows = load(&file);
+        let workflows = load(&file, &hosts(&["local"]));
 
         assert!(workflows.is_empty());
         assert_eq!(workflows.broken().len(), 1, "{:?}", workflows.broken());
@@ -581,15 +775,19 @@ type = "string"
     fn symlinked_files_are_included() {
         let root = TempDir::new().unwrap();
         let outside = TempDir::new().unwrap();
-        make(outside.path(), "linked");
+        make_in(outside.path(), "linked");
+        let dir = host_dir(root.path(), "local");
         for ext in ["json", "toml"] {
             std::os::unix::fs::symlink(
                 outside.path().join(format!("linked.{ext}")),
-                root.path().join(format!("linked.{ext}")),
+                dir.join(format!("linked.{ext}")),
             )
             .unwrap();
         }
 
-        assert_eq!(load(root.path()).names(), ["linked"]);
+        assert_eq!(
+            load(root.path(), &hosts(&["local"])).names_of("local"),
+            ["linked"]
+        );
     }
 }

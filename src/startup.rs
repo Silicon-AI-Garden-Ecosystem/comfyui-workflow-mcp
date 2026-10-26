@@ -34,15 +34,22 @@ pub async fn run() -> ExitCode {
     info!("timeout_seconds  {}", setting.timings.timeout_seconds);
     info!("poll_interval_ms {}", setting.timings.poll_interval_ms);
 
-    // No connection at startup: every spawn would pay a round trip. The debug probe
-    // tells a wrong address apart from wrong workflow parameters.
+    // No connection at startup: every spawn would pay a round trip per host. The debug
+    // probe tells a wrong address apart from wrong workflow parameters.
     if enabled!(Level::DEBUG) {
-        match comfy::Client::new(&config.env.base_url) {
-            Ok(client) => match client.system_stats().await {
-                Ok(version) => debug!("base_url         reachable, comfyui {version}"),
-                Err(err) => debug!("base_url         unreachable: {err}"),
-            },
-            Err(err) => debug!("base_url         client init failed: {err}"),
+        for host in config.workflows.hosts() {
+            match comfy::Client::new(&host.base_url) {
+                Ok(client) => match client.system_stats().await {
+                    Ok(version) => {
+                        debug!(
+                            "base_url         {} reachable, comfyui {version}",
+                            host.name
+                        )
+                    }
+                    Err(err) => debug!("base_url         {} unreachable: {err}", host.name),
+                },
+                Err(err) => debug!("base_url         {} client init failed: {err}", host.name),
+            }
         }
     }
 
@@ -53,27 +60,42 @@ pub async fn run() -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    // A broken workflow is left out of the set and the others keep working: one
-    // author's typo must not take down the server. The reason goes to the log.
-    for err in config.workflows.broken() {
-        warn!("workflow skipped: {err}");
-    }
-    for workflow in config.workflows.all() {
-        info!(
-            "  {}  ok  {} params ({} required)",
-            workflow.name,
-            workflow.manifest.params.len(),
-            workflow
-                .manifest
-                .params
-                .values()
-                .filter(|p| p.required())
-                .count()
-        );
-    }
-    info!("{} workflows ready", config.workflows.len());
+
+    log_hosts(&config);
 
     crate::tool::serve().await
+}
+
+/// A broken workflow is left out of the set and the others keep working: one author's typo
+/// must not take down the server. The reason goes to the log, next to the host it belongs to.
+fn log_hosts(config: &config::Config) {
+    let workflows = &config.workflows;
+
+    for err in workflows.broken() {
+        warn!("workflow skipped: {err}");
+    }
+
+    for host in workflows.hosts() {
+        info!("  host {}  {}", host.name, host.description);
+        for workflow in workflows.of_host(&host.name) {
+            info!(
+                "    {}  ok  {} params ({} required)",
+                workflow.name,
+                workflow.manifest.params.len(),
+                workflow
+                    .manifest
+                    .params
+                    .values()
+                    .filter(|p| p.required())
+                    .count()
+            );
+        }
+    }
+    info!(
+        "{} workflows on {} hosts ready",
+        workflows.len(),
+        workflows.hosts().len()
+    );
 }
 
 /// Probed once at startup: a read-only mount must surface here, not after a 30 second run.

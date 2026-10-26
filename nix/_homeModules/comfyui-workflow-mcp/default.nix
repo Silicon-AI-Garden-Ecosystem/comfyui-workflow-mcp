@@ -20,7 +20,7 @@ in
       example = lib.literalExpression ''
         {
           log_level = "info";
-          paths.env_file = "/run/secrets/comfyui-workflow-mcp.env";
+          paths.env_file = "/run/secrets/comfyui-workflow-mcp.toml";
       '';
       description = ''
         Written to `$XDG_CONFIG_HOME/comfyui-workflow-mcp/config.toml` as-is,

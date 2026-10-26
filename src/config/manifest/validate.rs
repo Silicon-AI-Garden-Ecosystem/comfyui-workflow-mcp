@@ -83,16 +83,16 @@ mod tests {
     fn parses_and_validates_sample_workflows() {
         let samples = [
             (
-                include_str!("../../../sim/workflows/image_sdxl_simple.toml"),
-                include_str!("../../../sim/workflows/image_sdxl_simple.json"),
+                include_str!("../../../sim/workflows/local/image_sdxl_simple.toml"),
+                include_str!("../../../sim/workflows/local/image_sdxl_simple.json"),
             ),
             (
-                include_str!("../../../sim/workflows/image_qwen_image_2_1_t2i.toml"),
-                include_str!("../../../sim/workflows/image_qwen_image_2_1_t2i.json"),
+                include_str!("../../../sim/workflows/local/image_qwen_image_2_1_t2i.toml"),
+                include_str!("../../../sim/workflows/local/image_qwen_image_2_1_t2i.json"),
             ),
             (
-                include_str!("../../../sim/workflows/image_qwen_image_2_1_image_edit.toml"),
-                include_str!("../../../sim/workflows/image_qwen_image_2_1_image_edit.json"),
+                include_str!("../../../sim/workflows/local/image_qwen_image_2_1_image_edit.toml"),
+                include_str!("../../../sim/workflows/local/image_qwen_image_2_1_image_edit.json"),
             ),
         ];
         for (toml_text, json_text) in samples {
@@ -108,7 +108,7 @@ mod tests {
         // The shipped samples must keep the shape the tool promises: a parameter without
         // a default is required, a random one is optional.
         let sdxl = parse(include_str!(
-            "../../../sim/workflows/image_sdxl_simple.toml"
+            "../../../sim/workflows/local/image_sdxl_simple.toml"
         ))
         .unwrap();
         assert!(sdxl.params["prompt"].required());
@@ -120,11 +120,11 @@ mod tests {
         // Image parameters are handed to the upload path instead of the JSON, so their
         // target must be the string field that ComfyUI reads the name from.
         let edit = parse(include_str!(
-            "../../../sim/workflows/image_qwen_image_2_1_image_edit.toml"
+            "../../../sim/workflows/local/image_qwen_image_2_1_image_edit.toml"
         ))
         .unwrap();
         let edit_json: Json = serde_json::from_str(include_str!(
-            "../../../sim/workflows/image_qwen_image_2_1_image_edit.json"
+            "../../../sim/workflows/local/image_qwen_image_2_1_image_edit.json"
         ))
         .unwrap();
         let images: Vec<_> = edit

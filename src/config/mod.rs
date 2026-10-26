@@ -7,7 +7,7 @@ pub(crate) mod manifest;
 mod setting;
 mod workflow;
 
-pub use env::Env;
+pub use env::{Env, Host};
 pub use manifest::{Manifest, Param, ParamType};
 pub use setting::{Descriptions, LogLevel, Setting};
 pub use workflow::{Workflow, Workflows};
@@ -25,12 +25,42 @@ pub fn load() -> Result<Config, String> {
 
 fn combine(setting: Setting) -> Result<Config, String> {
     let env = env::load(&setting.paths.env_file)?;
-    let workflows = workflow::load(&setting.paths.workflows_dir);
+    let workflows = workflow::load(&setting.paths.workflows_dir, &env.hosts);
     Ok(Config {
         setting,
         env,
         workflows,
     })
+}
+
+/// Host names become directory names, workflow names come from file names: both must be a
+/// single path component, and enforcing it here keeps "look up by name" from ever becoming
+/// "build a path from a name".
+pub(crate) fn validate_name(kind: &str, name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err(format!("{kind} name is empty"));
+    }
+    if name == "." || name == ".." {
+        return Err(format!("{kind} name must not be \".\" or \"..\""));
+    }
+    if name.contains('/') {
+        return Err(format!("{kind} name must not contain \"/\""));
+    }
+    if name.contains('\0') {
+        return Err(format!("{kind} name must not contain NUL"));
+    }
+    if name.chars().any(|c| c.is_control()) {
+        return Err(format!("{kind} name must not contain control characters"));
+    }
+    if name.trim() != name {
+        return Err(format!(
+            "{kind} name must not have leading or trailing whitespace"
+        ));
+    }
+    if name.len() > 255 {
+        return Err(format!("{kind} name exceeds 255 bytes"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -66,13 +96,17 @@ mod tests {
     #[test]
     fn env_is_read_from_the_path_the_config_declares() {
         let dir = TempDir::new().unwrap();
-        let env_file = dir.path().join("custom.env");
-        fs::write(&env_file, "BASE_URL=http://from-the-config:1234\n").unwrap();
+        let env_file = dir.path().join("custom.toml");
+        fs::write(
+            &env_file,
+            "[[hosts]]\nname = \"local\"\ndescription = \"d\"\nbase_url = \"http://from-the-config:1234\"\n",
+        )
+        .unwrap();
         let config_file = write_config(dir.path(), &config_text(dir.path(), &env_file));
 
         let loaded = load_from(&config_file, dir.path()).unwrap();
 
-        assert_eq!(loaded.env.base_url, "http://from-the-config:1234");
+        assert_eq!(loaded.env.hosts[0].base_url, "http://from-the-config:1234");
     }
 
     #[test]

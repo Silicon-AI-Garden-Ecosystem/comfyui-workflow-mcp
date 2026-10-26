@@ -1,5 +1,6 @@
-//! Searching is how a model finds out what exists: the list of workflows, and the
-//! parameters of one workflow, which is the contract it has to fill in.
+//! Searching is how a model finds out what exists: first the hosts, then the workflows of
+//! one host, then the parameters of one workflow. Each step stays small, and the next step
+//! is a hint in the answer rather than a paragraph in the tool description.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Tool};
@@ -11,14 +12,16 @@ use serde_json::{Map, Value as Json, json};
 
 use crate::config::{self, Descriptions, Param, ParamType, Workflow, Workflows};
 
-use super::{Server, args_schema, fail, text, unknown};
+use super::{Server, args_schema, fail, text, unknown_host, unknown_workflow};
 
 /// The field help is not written here: `list_tools` overwrites the schema descriptions
 /// from `[descriptions]`, so the wording has a single source.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct SearchArgs {
     #[serde(default)]
-    name: Option<String>,
+    host_name: Option<String>,
+    #[serde(default)]
+    workflow_name: Option<String>,
 }
 
 #[tool_router(router = search_router, vis = "pub(super)")]
@@ -32,14 +35,32 @@ impl Server {
             Ok(loaded) => loaded,
             Err(err) => return Ok(fail(err)),
         };
+        let workflows = &loaded.workflows;
+        let descriptions = &loaded.setting.descriptions;
 
-        let Some(name) = args.name else {
-            return Ok(text(list(&loaded.workflows)));
+        // A workflow without a host is ambiguous as soon as two hosts share a name, so it
+        // is rejected instead of guessing a host.
+        let Some(host_name) = args.host_name else {
+            if args.workflow_name.is_some() {
+                return Ok(fail("workflow_name needs host_name".to_string()));
+            }
+            return Ok(text(hosts(workflows, descriptions)));
         };
 
-        match loaded.workflows.get(&name) {
-            Some(workflow) => Ok(text(detail(workflow))),
-            None => Ok(fail(unknown(&loaded.workflows, &name))),
+        if workflows.host(&host_name).is_none() {
+            return Ok(fail(unknown_host(workflows, &host_name)));
+        }
+
+        match args.workflow_name {
+            None => Ok(text(host_workflows(workflows, &host_name, descriptions))),
+            Some(workflow_name) => match workflows.get(&host_name, &workflow_name) {
+                Some(workflow) => Ok(text(detail(workflow))),
+                None => Ok(fail(unknown_workflow(
+                    workflows,
+                    &host_name,
+                    &workflow_name,
+                ))),
+            },
         }
     }
 }
@@ -48,14 +69,38 @@ pub(super) fn tool(descriptions: &Descriptions) -> Tool {
     Tool::new(
         "search",
         descriptions.search_tool.clone(),
-        args_schema::<SearchArgs>(&[("name", &descriptions.name_arg)]),
+        args_schema::<SearchArgs>(&[
+            ("host_name", &descriptions.host_name_arg),
+            ("workflow_name", &descriptions.workflow_name_arg),
+        ]),
     )
 }
 
-fn list(workflows: &Workflows) -> String {
+/// Only the name and the human description: a host may carry a token or an internal
+/// address, and the model has no use for either.
+fn hosts(workflows: &Workflows, descriptions: &Descriptions) -> String {
     let items: Vec<Json> = workflows
-        .all()
+        .hosts()
         .iter()
+        .map(|host| {
+            json!({
+                "name": host.name,
+                "description": host.description,
+            })
+        })
+        .collect();
+
+    json!({
+        "hosts": items,
+        "hint": descriptions.hint_hosts,
+    })
+    .to_string()
+}
+
+fn host_workflows(workflows: &Workflows, host: &str, descriptions: &Descriptions) -> String {
+    let items: Vec<Json> = workflows
+        .of_host(host)
+        .into_iter()
         .map(|workflow| {
             json!({
                 "name": workflow.name,
@@ -63,7 +108,13 @@ fn list(workflows: &Workflows) -> String {
             })
         })
         .collect();
-    Json::Array(items).to_string()
+
+    json!({
+        "host": host,
+        "workflows": items,
+        "hint": descriptions.hint_workflows,
+    })
+    .to_string()
 }
 
 /// The shape is fixed by `sim/trace.md` and stays minimal on purpose: fewer fields mean
@@ -77,6 +128,7 @@ fn detail(workflow: &Workflow) -> String {
         .collect();
 
     json!({
+        "host": workflow.host,
         "name": workflow.name,
         "description": workflow.description,
         "params": params,

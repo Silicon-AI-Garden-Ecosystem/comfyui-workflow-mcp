@@ -51,8 +51,11 @@ pub struct Timings {
 pub struct Descriptions {
     pub search_tool: String,
     pub run_tool: String,
-    pub name_arg: String,
+    pub host_name_arg: String,
+    pub workflow_name_arg: String,
     pub output_path_arg: String,
+    pub hint_hosts: String,
+    pub hint_workflows: String,
 }
 
 #[derive(Debug, PartialEq, Deserialize)]

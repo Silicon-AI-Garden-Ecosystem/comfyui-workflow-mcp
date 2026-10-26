@@ -1,6 +1,6 @@
 //! The wire protocol is mirrored, not modelled: a submit counts as success only when
 //! ComfyUI answered 200 with empty `node_errors`, and its error bodies are forwarded
-//! unchanged (measured, see `docs/probe.md`). The address comes from `.env`, never from
+//! unchanged (measured, see `docs/probe.md`). The address comes from `env.toml`, never from
 //! the tool arguments.
 
 use serde_json::Value as Json;

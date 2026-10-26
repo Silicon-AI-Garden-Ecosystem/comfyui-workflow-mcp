@@ -30,7 +30,7 @@ fn write_config(dir: &Path) -> PathBuf {
     write_config_extra(dir, "")
 }
 
-/// The same config plus extra text in `[descriptions]`; the address stays in `.env`.
+/// The same config plus extra text in `[descriptions]`; the host list stays in `env.toml`.
 fn write_config_extra(dir: &Path, extra: &str) -> PathBuf {
     write_config_for(dir, &workflows_dir(), extra)
 }
@@ -39,8 +39,12 @@ fn write_config_for(dir: &Path, workflows: &Path, extra: &str) -> PathBuf {
     let config_dir = xdg_config_home(dir).join("comfyui-workflow-mcp");
     std::fs::create_dir_all(&config_dir).unwrap();
 
-    let env_file = dir.join("env");
-    std::fs::write(&env_file, "BASE_URL=http://127.0.0.1:9\n").unwrap();
+    let env_file = dir.join("env.toml");
+    std::fs::write(
+        &env_file,
+        "[[hosts]]\nname = \"local\"\ndescription = \"test host\"\nbase_url = \"http://127.0.0.1:9\"\n",
+    )
+    .unwrap();
 
     let path = config_dir.join("config.toml");
     let body = format!(
@@ -153,6 +157,15 @@ fn text_of(response: &Json) -> &str {
         .unwrap_or_else(|| panic!("no text content: {response}"))
 }
 
+fn body_of(session: &Session, id: u64) -> Json {
+    let response = session
+        .responses
+        .iter()
+        .find(|response| response["id"] == id)
+        .expect("response for the requested id");
+    serde_json::from_str(text_of(response)).unwrap()
+}
+
 #[test]
 fn stdout_carries_only_jsonrpc() {
     let search = call(3, "search", serde_json::json!({}));
@@ -210,20 +223,25 @@ fn run_exposes_an_optional_output_path() {
             .unwrap()
             .contains("root directory")
     );
-    assert!(
-        run["inputSchema"]["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|name| name != "output_path"),
-        "output_path must be optional"
-    );
+    let required: Vec<&str> = run["inputSchema"]["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap())
+        .collect();
+    assert!(required.contains(&"host_name"), "{required:?}");
+    assert!(required.contains(&"workflow_name"), "{required:?}");
+    assert!(!required.contains(&"output_path"), "{required:?}");
 
     // The rejection happens during validation, so the test never needs a live ComfyUI.
     let run_call = call(
         3,
         "run",
-        serde_json::json!({ "name": "image_sdxl_simple", "output_path": "relative/out" }),
+        serde_json::json!({
+            "host_name": "local",
+            "workflow_name": "image_sdxl_simple",
+            "output_path": "relative/out",
+        }),
     );
     let session = session(&[INIT, &run_call]);
     let response = session.responses.iter().find(|r| r["id"] == 3).unwrap();
@@ -236,16 +254,32 @@ fn run_exposes_an_optional_output_path() {
 }
 
 #[test]
-fn search_without_name_lists_workflows() {
+fn search_without_arguments_lists_hosts() {
     let search = call(3, "search", serde_json::json!({}));
     let session = session(&[INIT, LIST, &search]);
 
-    let response = session.responses.iter().find(|r| r["id"] == 3).unwrap();
-    assert_eq!(response["result"]["isError"], false);
+    let body = body_of(&session, 3);
+    let hosts = body["hosts"].as_array().unwrap();
+    assert_eq!(hosts.len(), 1, "{body}");
+    assert_eq!(hosts[0]["name"], "local");
+    assert_eq!(hosts[0]["description"], "test host");
+    // The address is not part of the answer: a host may point at something private.
+    assert!(hosts[0].get("base_url").is_none(), "{body}");
+    assert!(
+        body["hint"].as_str().unwrap().contains("host_name"),
+        "{body}"
+    );
+}
 
-    let body: Json = serde_json::from_str(text_of(response)).unwrap();
-    let items = body.as_array().unwrap();
-    assert!(!items.is_empty(), "the sample workflows must be listed");
+#[test]
+fn search_with_a_host_lists_its_workflows() {
+    let search = call(3, "search", serde_json::json!({ "host_name": "local" }));
+    let session = session(&[INIT, LIST, &search]);
+
+    let body = body_of(&session, 3);
+    assert_eq!(body["host"], "local");
+    let items = body["workflows"].as_array().unwrap();
+    assert!(!items.is_empty(), "{body}");
 
     // The names come from the files, so the list follows their order and nothing else.
     let names: Vec<&str> = items
@@ -255,24 +289,20 @@ fn search_without_name_lists_workflows() {
     let mut sorted = names.clone();
     sorted.sort_unstable();
     assert_eq!(names, sorted);
-    for item in items {
-        assert!(!item["description"].as_str().unwrap().is_empty());
-    }
+    assert!(body["hint"].as_str().unwrap().contains("workflow_name"));
 }
 
 #[test]
-fn search_with_name_expands_params() {
+fn search_with_a_workflow_expands_params() {
     let search = call(
         3,
         "search",
-        serde_json::json!({ "name": "image_sdxl_simple" }),
+        serde_json::json!({ "host_name": "local", "workflow_name": "image_sdxl_simple" }),
     );
     let session = session(&[INIT, LIST, &search]);
 
-    let response = session.responses.iter().find(|r| r["id"] == 3).unwrap();
-    assert_eq!(response["result"]["isError"], false);
-
-    let body: Json = serde_json::from_str(text_of(response)).unwrap();
+    let body = body_of(&session, 3);
+    assert_eq!(body["host"], "local");
     assert_eq!(body["name"], "image_sdxl_simple");
     assert_eq!(body["params"]["prompt"]["required"], true);
     // A parameter with a default carries it; the value itself belongs to the workflow,
@@ -281,7 +311,24 @@ fn search_with_name_expands_params() {
     // `random` looks like `optional` to the model; the server draws the value for this run.
     assert!(body["params"]["seed"].get("random").is_none());
     assert_eq!(body["params"]["seed"]["optional"], true);
-    assert!(body["params"]["seed"].get("note").is_none());
+}
+
+#[test]
+fn a_workflow_name_without_a_host_is_rejected() {
+    let search = call(
+        3,
+        "search",
+        serde_json::json!({ "workflow_name": "image_sdxl_simple" }),
+    );
+    let session = session(&[INIT, &search]);
+
+    let response = session.responses.iter().find(|r| r["id"] == 3).unwrap();
+    assert_eq!(response["result"]["isError"], true);
+    assert!(
+        text_of(response).contains("needs host_name"),
+        "{}",
+        text_of(response)
+    );
 }
 
 #[test]
@@ -289,12 +336,14 @@ fn file_parameters_are_shown_as_file_type() {
     let search = call(
         3,
         "search",
-        serde_json::json!({ "name": "image_qwen_image_2_1_image_edit" }),
+        serde_json::json!({
+            "host_name": "local",
+            "workflow_name": "image_qwen_image_2_1_image_edit",
+        }),
     );
     let session = session(&[INIT, LIST, &search]);
 
-    let response = session.responses.iter().find(|r| r["id"] == 3).unwrap();
-    let body: Json = serde_json::from_str(text_of(response)).unwrap();
+    let body = body_of(&session, 3);
     let params = body["params"].as_object().unwrap();
     let files: Vec<_> = params
         .iter()
@@ -313,35 +362,43 @@ fn file_parameters_are_shown_as_file_type() {
 }
 
 #[test]
-fn unknown_workflow_lists_every_name() {
-    let list = call(3, "search", serde_json::json!({}));
-    let unknown = call(
-        4,
+fn unknown_names_list_every_alternative() {
+    let hosts = call(3, "search", serde_json::json!({}));
+    let workflows = call(4, "search", serde_json::json!({ "host_name": "local" }));
+    let bad_host = call(5, "search", serde_json::json!({ "host_name": "nope" }));
+    let bad_workflow = call(
+        6,
         "search",
-        serde_json::json!({ "name": "image_sdxl_simpl" }),
+        serde_json::json!({ "host_name": "local", "workflow_name": "image_sdxl_simpl" }),
     );
-    let session = session(&[INIT, LIST, &list, &unknown]);
+    let session = session(&[INIT, &hosts, &workflows, &bad_host, &bad_workflow]);
 
-    // The names come from the files, so the error has to list all of them.
-    let listed = session.responses.iter().find(|r| r["id"] == 3).unwrap();
-    let available: Vec<String> = serde_json::from_str::<Json>(text_of(listed))
-        .unwrap()
+    let listed = body_of(&session, 4);
+    let available: Vec<&str> = listed["workflows"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|item| item["name"].as_str().unwrap().to_string())
+        .map(|item| item["name"].as_str().unwrap())
         .collect();
     assert!(!available.is_empty());
 
-    let response = session.responses.iter().find(|r| r["id"] == 4).unwrap();
+    let response = session.responses.iter().find(|r| r["id"] == 5).unwrap();
+    assert_eq!(response["result"]["isError"], true);
+    assert!(
+        text_of(response).contains("unknown host \"nope\""),
+        "{}",
+        text_of(response)
+    );
+
+    let response = session.responses.iter().find(|r| r["id"] == 6).unwrap();
     assert_eq!(response["result"]["isError"], true);
     let text = text_of(response);
     assert!(
         text.contains("unknown workflow \"image_sdxl_simpl\""),
         "{text}"
     );
-    for name in &available {
-        assert!(text.contains(name.as_str()), "{text} must list {name}");
+    for name in available {
+        assert!(text.contains(name), "{text} must list {name}");
     }
 }
 
@@ -363,9 +420,10 @@ fn runs_without_config_file_using_defaults() {
         "the startup log must name the config file path: {}",
         session.stderr
     );
-    // The default workflows directory does not exist yet: 0 workflows, not a failure.
-    let response = session.responses.iter().find(|r| r["id"] == 3).unwrap();
-    assert_eq!(text_of(response), "[]");
+    // The default workflows directory does not exist yet, but the built-in host list does:
+    // the host is listed, it simply has no workflows.
+    let body = body_of(&session, 3);
+    assert!(!body["hosts"].as_array().unwrap().is_empty(), "{body}");
 
     // Falling back to the defaults does not mean creating them on the way.
     assert!(
@@ -379,9 +437,10 @@ fn runs_without_config_file_using_defaults() {
 fn a_new_workflow_shows_up_without_restarting() {
     // The workflows are re-read on every call: an agent may never restart the server.
     let dir = TempDir::new().unwrap();
-    let workflows = dir.path().join("workflows");
-    std::fs::create_dir_all(&workflows).unwrap();
-    write_config_for(dir.path(), &workflows, "");
+    let root = dir.path().join("workflows");
+    let host_dir = root.join("local");
+    std::fs::create_dir_all(&host_dir).unwrap();
+    write_config_for(dir.path(), &root, "");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_comfyui-workflow-mcp"))
         .env("HOME", dir.path())
@@ -404,21 +463,32 @@ fn a_new_workflow_shows_up_without_restarting() {
     };
 
     exchange(INIT);
-    let before = exchange(&call(2, "search", serde_json::json!({})));
-    assert_eq!(text_of(&before), "[]");
+    let before = exchange(&call(
+        2,
+        "search",
+        serde_json::json!({ "host_name": "local" }),
+    ));
+    let before: Json = serde_json::from_str(text_of(&before)).unwrap();
+    assert_eq!(before["workflows"].as_array().unwrap().len(), 0);
 
     // A workflow arrives as a file pair, so both halves have to appear.
     for extension in ["json", "toml"] {
         std::fs::copy(
-            workflows_dir().join(format!("image_sdxl_simple.{extension}")),
-            workflows.join(format!("image_sdxl_simple.{extension}")),
+            workflows_dir()
+                .join("local")
+                .join(format!("image_sdxl_simple.{extension}")),
+            host_dir.join(format!("image_sdxl_simple.{extension}")),
         )
         .unwrap();
     }
 
-    let after = exchange(&call(3, "search", serde_json::json!({})));
+    let after = exchange(&call(
+        3,
+        "search",
+        serde_json::json!({ "host_name": "local" }),
+    ));
     let listed: Json = serde_json::from_str(text_of(&after)).unwrap();
-    let names: Vec<&str> = listed
+    let names: Vec<&str> = listed["workflows"]
         .as_array()
         .unwrap()
         .iter()
@@ -438,7 +508,7 @@ fn tool_text_comes_from_the_config() {
     let search = call(
         3,
         "search",
-        serde_json::json!({ "name": "image_sdxl_simple" }),
+        serde_json::json!({ "host_name": "local", "workflow_name": "image_sdxl_simple" }),
     );
     let session = session_in(dir.path(), &[INIT, LIST, &search]);
 

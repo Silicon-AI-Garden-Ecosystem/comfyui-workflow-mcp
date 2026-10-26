@@ -7,7 +7,7 @@ log_level        = "info"
 # ${XDG_*} is expanded, falling back to the ~/.local/... default when the variable is unset.
 # Relative paths in a user config resolve against the directory of the file that declares them.
 [paths]
-env_file         = "${XDG_DATA_HOME:-~/.local/share}/comfyui-workflow-mcp/.env"
+env_file         = "${XDG_DATA_HOME:-~/.local/share}/comfyui-workflow-mcp/env.toml"
 logs_dir         = "${XDG_STATE_HOME:-~/.local/state}/comfyui-workflow-mcp/logs"
 output_dir       = "${XDG_CACHE_HOME:-~/.cache}/comfyui-workflow-mcp/output"
 workflows_dir    = "${XDG_DATA_HOME:-~/.local/share}/comfyui-workflow-mcp/workflows"
@@ -17,7 +17,10 @@ timeout_seconds  = 300
 poll_interval_ms = 1000
 
 [descriptions]
-search_tool      = "Without `name`, list the available ComfyUI workflows and return a [{name, description}] list. With `name`, show that workflow's parameters (a parameter that has a `default` field is optional)."
-run_tool         = "Run a ComfyUI workflow and return the absolute path of the directory where this run's outputs are stored (one directory per run). For the `name` value and the `params` fields, see the result of `search(name)`. Optionally pass `output_path` to choose where the outputs are stored."
-name_arg         = "Workflow name, must match the original exactly and is case-sensitive."
-output_path_arg  = "Optional root directory for this run's output; must be absolute or start with ~/. The run still goes into a per-run subdirectory below it."
+search_tool       = "With no arguments, list the hosts. With `host_name`, list that host's workflows. With `host_name` and `workflow_name`, show the parameters of that workflow."
+run_tool          = "Run a workflow on a host and return the absolute path of the directory where this run's outputs are stored (one directory per run). Get `host_name`, `workflow_name` and the `params` fields from `search`. Optionally pass `output_path` to choose where the outputs are stored."
+host_name_arg     = "Host name, must match the original exactly and is case-sensitive."
+workflow_name_arg = "Workflow name on that host, must match the original exactly and is case-sensitive."
+output_path_arg   = "Optional root directory for this run's output; must be absolute or start with ~/. The run still goes into a per-run subdirectory below it."
+hint_hosts        = "Pass `host_name` to list the workflows of that host."
+hint_workflows    = "Pass `host_name` and `workflow_name` to see the parameters needed to run that workflow."

@@ -107,15 +107,27 @@ fn args_schema<T: JsonSchema + std::any::Any>(
     schema
 }
 
-/// An unknown name lists every available name: the number of workflows is single digit,
-/// so listing them beats fuzzy matching, which would quietly run a different workflow.
-fn unknown(workflows: &Workflows, name: &str) -> String {
-    let names = workflows.names();
+/// An unknown name lists every available name: the number of hosts and workflows is single
+/// digit, so listing them beats fuzzy matching, which would quietly run a different workflow.
+fn unknown_host(workflows: &Workflows, name: &str) -> String {
+    let names: Vec<&str> = workflows
+        .hosts()
+        .iter()
+        .map(|host| host.name.as_str())
+        .collect();
     if names.is_empty() {
-        return format!("unknown workflow \"{name}\": no workflows are available");
+        return format!("unknown host \"{name}\": no hosts are configured");
+    }
+    format!("unknown host \"{name}\". Available: {}", names.join(", "))
+}
+
+fn unknown_workflow(workflows: &Workflows, host: &str, name: &str) -> String {
+    let names = workflows.names_of(host);
+    if names.is_empty() {
+        return format!("unknown workflow \"{name}\": host \"{host}\" has no workflows");
     }
     format!(
-        "unknown workflow \"{name}\". Available: {}",
+        "unknown workflow \"{name}\" on host \"{host}\". Available: {}",
         names.join(", ")
     )
 }

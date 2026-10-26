@@ -125,12 +125,16 @@ pub async fn execute(
 
     // The server picks the path and writes the workflow before the submit: ComfyUI's
     // history disappears on restart, and a rejected submit must leave the evidence behind.
-    let dir = output::create_run_dir(root, &workflow.name, SystemTime::now()).map_err(|err| {
-        RunError::Io {
-            path: root.to_path_buf(),
-            detail: err.to_string(),
-        }
-    })?;
+    // One directory per host and workflow: two hosts may well have a workflow of the same
+    // name, and their artifacts must not mix.
+    let host_root = root.join(&workflow.host);
+    let dir =
+        output::create_run_dir(&host_root, &workflow.name, SystemTime::now()).map_err(|err| {
+            RunError::Io {
+                path: host_root.clone(),
+                detail: err.to_string(),
+            }
+        })?;
     write_workflow(&dir, &prompt)?;
 
     let submitted = match phase(
