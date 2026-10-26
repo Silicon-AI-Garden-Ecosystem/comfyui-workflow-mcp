@@ -17,7 +17,7 @@ target = ["470", "inputs", "image"]
 type = "file"
 
 [params.image_2]
-description = "<Image 2>"
+description = "Optional <Image 2>"
 target = ["475", "inputs", "image"]
 type = "file"
 default = ""

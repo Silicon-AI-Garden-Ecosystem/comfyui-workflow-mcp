@@ -24,7 +24,7 @@ pub(super) struct SearchArgs {
 #[tool_router(router = search_router, vis = "pub(super)")]
 impl Server {
     #[tool]
-    async fn workflow_search(
+    async fn search(
         &self,
         Parameters(args): Parameters<SearchArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -46,7 +46,7 @@ impl Server {
 
 pub(super) fn tool(descriptions: &Descriptions) -> Tool {
     Tool::new(
-        "workflow_search",
+        "search",
         descriptions.search_tool.clone(),
         args_schema::<SearchArgs>(&[("name", &descriptions.name_arg)]),
     )

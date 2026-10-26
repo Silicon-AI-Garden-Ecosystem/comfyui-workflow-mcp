@@ -155,7 +155,7 @@ fn text_of(response: &Json) -> &str {
 
 #[test]
 fn stdout_carries_only_jsonrpc() {
-    let search = call(3, "workflow_search", serde_json::json!({}));
+    let search = call(3, "search", serde_json::json!({}));
     let session = session(&[INIT, LIST, &search]);
 
     assert_eq!(
@@ -170,7 +170,7 @@ fn stdout_carries_only_jsonrpc() {
 
 #[test]
 fn tools_list_exposes_both_tools() {
-    let search = call(3, "workflow_search", serde_json::json!({}));
+    let search = call(3, "search", serde_json::json!({}));
     let session = session(&[INIT, LIST, &search]);
 
     let list = session
@@ -185,7 +185,7 @@ fn tools_list_exposes_both_tools() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["workflow_run", "workflow_search"]);
+    assert_eq!(names, ["run", "search"]);
 
     let info = session.responses.iter().find(|r| r["id"] == 1).unwrap();
     assert_eq!(info["result"]["serverInfo"]["name"], "comfyui-workflow-mcp");
@@ -199,7 +199,7 @@ fn run_exposes_an_optional_output_path() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|tool| tool["name"] == "workflow_run")
+        .find(|tool| tool["name"] == "run")
         .unwrap();
 
     let output_path = &run["inputSchema"]["properties"]["output_path"];
@@ -222,7 +222,7 @@ fn run_exposes_an_optional_output_path() {
     // The rejection happens during validation, so the test never needs a live ComfyUI.
     let run_call = call(
         3,
-        "workflow_run",
+        "run",
         serde_json::json!({ "name": "image_sdxl_simple", "output_path": "relative/out" }),
     );
     let session = session(&[INIT, &run_call]);
@@ -237,7 +237,7 @@ fn run_exposes_an_optional_output_path() {
 
 #[test]
 fn search_without_name_lists_workflows() {
-    let search = call(3, "workflow_search", serde_json::json!({}));
+    let search = call(3, "search", serde_json::json!({}));
     let session = session(&[INIT, LIST, &search]);
 
     let response = session.responses.iter().find(|r| r["id"] == 3).unwrap();
@@ -264,7 +264,7 @@ fn search_without_name_lists_workflows() {
 fn search_with_name_expands_params() {
     let search = call(
         3,
-        "workflow_search",
+        "search",
         serde_json::json!({ "name": "image_sdxl_simple" }),
     );
     let session = session(&[INIT, LIST, &search]);
@@ -288,7 +288,7 @@ fn search_with_name_expands_params() {
 fn file_parameters_are_shown_as_file_type() {
     let search = call(
         3,
-        "workflow_search",
+        "search",
         serde_json::json!({ "name": "image_qwen_image_2_1_image_edit" }),
     );
     let session = session(&[INIT, LIST, &search]);
@@ -314,10 +314,10 @@ fn file_parameters_are_shown_as_file_type() {
 
 #[test]
 fn unknown_workflow_lists_every_name() {
-    let list = call(3, "workflow_search", serde_json::json!({}));
+    let list = call(3, "search", serde_json::json!({}));
     let unknown = call(
         4,
-        "workflow_search",
+        "search",
         serde_json::json!({ "name": "image_sdxl_simpl" }),
     );
     let session = session(&[INIT, LIST, &list, &unknown]);
@@ -348,7 +348,7 @@ fn unknown_workflow_lists_every_name() {
 #[test]
 fn runs_without_config_file_using_defaults() {
     let dir = TempDir::new().unwrap();
-    let search = call(3, "workflow_search", serde_json::json!({}));
+    let search = call(3, "search", serde_json::json!({}));
     let session = session_in(dir.path(), &[INIT, LIST, &search]);
 
     assert_eq!(ids(&session), [1, 2, 3]);
@@ -404,7 +404,7 @@ fn a_new_workflow_shows_up_without_restarting() {
     };
 
     exchange(INIT);
-    let before = exchange(&call(2, "workflow_search", serde_json::json!({})));
+    let before = exchange(&call(2, "search", serde_json::json!({})));
     assert_eq!(text_of(&before), "[]");
 
     // A workflow arrives as a file pair, so both halves have to appear.
@@ -416,7 +416,7 @@ fn a_new_workflow_shows_up_without_restarting() {
         .unwrap();
     }
 
-    let after = exchange(&call(3, "workflow_search", serde_json::json!({})));
+    let after = exchange(&call(3, "search", serde_json::json!({})));
     let listed: Json = serde_json::from_str(text_of(&after)).unwrap();
     let names: Vec<&str> = listed
         .as_array()
@@ -437,7 +437,7 @@ fn tool_text_comes_from_the_config() {
 
     let search = call(
         3,
-        "workflow_search",
+        "search",
         serde_json::json!({ "name": "image_sdxl_simple" }),
     );
     let session = session_in(dir.path(), &[INIT, LIST, &search]);
@@ -447,7 +447,7 @@ fn tool_text_comes_from_the_config() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|tool| tool["name"] == "workflow_search")
+        .find(|tool| tool["name"] == "search")
         .unwrap();
     assert_eq!(tool["description"], "CUSTOM SEARCH");
 
@@ -456,7 +456,7 @@ fn tool_text_comes_from_the_config() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|tool| tool["name"] == "workflow_run")
+        .find(|tool| tool["name"] == "run")
         .unwrap();
     assert!(
         run["description"]

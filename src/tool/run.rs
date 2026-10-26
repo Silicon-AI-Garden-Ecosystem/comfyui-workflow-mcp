@@ -30,7 +30,7 @@ pub(super) struct RunArgs {
 #[tool_router(router = run_router, vis = "pub(super)")]
 impl Server {
     #[tool]
-    async fn workflow_run(
+    async fn run(
         &self,
         Parameters(args): Parameters<RunArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -62,7 +62,7 @@ impl Server {
         let timeout = Duration::from_secs(loaded.setting.timings.timeout_seconds);
         let poll_interval = Duration::from_millis(loaded.setting.timings.poll_interval_ms);
 
-        tracing::info!(workflow = %workflow.name, "workflow_run");
+        tracing::info!(workflow = %workflow.name, "run");
         match execution::execute(
             &client,
             workflow,
@@ -81,7 +81,7 @@ impl Server {
 
 pub(super) fn tool(descriptions: &Descriptions) -> Tool {
     Tool::new(
-        "workflow_run",
+        "run",
         descriptions.run_tool.clone(),
         args_schema::<RunArgs>(&[
             ("name", &descriptions.name_arg),
