@@ -20,6 +20,14 @@ type = "file"
 description = "<Image 2>"
 target = ["475", "inputs", "image"]
 type = "file"
+default = ""
+
+[[params.image_2.hook]]
+when = "default"
+remove = [["459:474", "inputs", "images.image_2"]]
+set = [
+  { target = ["459:468", "inputs", "switch"], value = false },
+]
 
 [params.seed]
 description = "Seed"

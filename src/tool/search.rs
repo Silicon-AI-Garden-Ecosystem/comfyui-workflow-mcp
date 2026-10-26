@@ -92,6 +92,10 @@ fn param_json(param: &Param) -> Json {
     // only omit a parameter. The three "what if omitted" variants are mutually exclusive.
     if param.required() {
         object.insert("required".to_string(), Json::Bool(true));
+    } else if !param.hooks.is_empty() {
+        // The default is the marker that the hook fires on, not a value the model should
+        // copy: dropping the input is the template's business, not an argument.
+        object.insert("optional".to_string(), Json::Bool(true));
     } else if let Some(default) = &param.default {
         object.insert("default".to_string(), default.clone());
     } else {
@@ -134,6 +138,7 @@ mod tests {
             range: None,
             values: None,
             description: None,
+            hooks: Vec::new(),
         }
     }
 

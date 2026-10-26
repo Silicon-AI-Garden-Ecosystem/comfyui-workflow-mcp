@@ -302,9 +302,14 @@ fn file_parameters_are_shown_as_file_type() {
         .collect();
 
     assert!(!files.is_empty(), "{body}");
-    for (name, param) in files {
-        assert_eq!(param["required"], true, "{name} has no default: {body}");
+    for (name, param) in &files {
+        assert_eq!(param["type"], "file", "{name}: {body}");
     }
+    // A hook makes a parameter optional without giving it a default value: the workflow
+    // drops the input instead of filling it in.
+    assert_eq!(params["image_1"]["required"], true, "{body}");
+    assert_eq!(params["image_2"]["optional"], true, "{body}");
+    assert!(params["image_2"].get("default").is_none(), "{body}");
 }
 
 #[test]

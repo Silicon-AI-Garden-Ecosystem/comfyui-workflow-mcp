@@ -1,8 +1,3 @@
-//! The TOML half of a workflow pair is a contract for a human author, so it is read strictly:
-//! an unknown key is an error instead of a silent no-op, and every error points at its line --
-//! a contract that can be misread produces a run that differs from what the author wrote.
-
-use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::Path;
 
@@ -10,132 +5,10 @@ use serde::Deserialize;
 use serde_json::Value as Json;
 use toml::Spanned;
 
+use super::*;
 use crate::core::error::LoadError;
 
-/// The reserved `default` value: the server draws this run's value from `range` / `enum`, so
-/// the drawn value is always one the workflow accepts.
-pub const RANDOM: &str = "random";
-
-/// Integer bounds are capped here: MCP clients parse JSON numbers as doubles, so a larger
-/// value comes back changed -- a silently altered seed is worse than a rejected one.
-pub const MAX_SAFE_INT: i64 = 9_007_199_254_740_991;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParamType {
-    String,
-    Integer,
-    Float,
-    Boolean,
-    /// A path on the machine running this server: the file is uploaded to ComfyUI and
-    /// replaced by a content-addressed name before the prompt is submitted.
-    File,
-}
-
-impl ParamType {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::String => "string",
-            Self::Integer => "integer",
-            Self::Float => "float",
-            Self::Boolean => "boolean",
-            Self::File => "file",
-        }
-    }
-
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw {
-            "string" => Some(Self::String),
-            "integer" => Some(Self::Integer),
-            "float" => Some(Self::Float),
-            "boolean" => Some(Self::Boolean),
-            "file" => Some(Self::File),
-            _ => None,
-        }
-    }
-
-    /// A float accepts an integer: `8` and `8.0` are the same JSON number, so the declared
-    /// type is the only thing that says which spelling is expected. Nothing else is converted.
-    pub fn accepts(self, value: &Json) -> bool {
-        match self {
-            Self::String => value.is_string(),
-            Self::Integer => is_integer(value),
-            Self::Float => value.is_number(),
-            Self::Boolean => value.is_boolean(),
-            // The caller passes a path; the wire value is the uploaded file's name, also a string.
-            Self::File => value.is_string(),
-        }
-    }
-}
-
-pub fn json_kind(value: &Json) -> &'static str {
-    match value {
-        Json::Null => "null",
-        Json::Bool(_) => "boolean",
-        Json::Number(n) if n.is_f64() => "float",
-        Json::Number(_) => "integer",
-        Json::String(_) => "string",
-        Json::Array(_) => "array",
-        Json::Object(_) => "object",
-    }
-}
-
-pub fn is_integer(value: &Json) -> bool {
-    match value {
-        Json::Number(n) => n.is_u64() || n.is_i64(),
-        _ => false,
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Param {
-    /// JSON pointer segments, e.g. `["6", "inputs", "text"]`: addressing is exact on purpose,
-    /// because default titles repeat and a semantic match can write the positive prompt into
-    /// the negative one.
-    pub target: Vec<String>,
-    pub ty: ParamType,
-    pub default: Option<Json>,
-    pub random: bool,
-    /// A closed interval. The range is part of the contract, so an explicit value is checked
-    /// against it just like a drawn one.
-    pub range: Option<(f64, f64)>,
-    pub values: Option<Vec<String>>,
-    pub description: Option<String>,
-}
-
-impl Param {
-    /// Absent `default` means required; `default = "random"` counts as optional. Only these two
-    /// exist: a third would make the result depend on whether the caller passed a value.
-    pub fn required(&self) -> bool {
-        self.default.is_none() && !self.random
-    }
-}
-
-impl Param {
-    pub fn pointer(&self) -> String {
-        let mut out = String::new();
-        for segment in &self.target {
-            out.push('/');
-            out.push_str(&segment.replace('~', "~0").replace('/', "~1"));
-        }
-        out
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Manifest {
-    pub description: String,
-    pub params: BTreeMap<String, Param>,
-}
-
-/// A target must be a writable leaf: in ComfyUI's export an array is a link, not a value, and
-/// an object or null is not a scalar either.
-pub(crate) fn is_leaf_scalar(value: &Json) -> bool {
-    matches!(value, Json::Number(_) | Json::String(_) | Json::Bool(_))
-}
-
 impl Manifest {
-    /// Everything that can be decided from the TOML alone. The checks that need the workflow
-    /// JSON happen in `validate`, so one round reports every problem instead of one per fix.
     pub fn parse(text: &str, path: &Path) -> Result<Self, LoadError> {
         let src = Source::new(text, path);
         let raw: RawManifest = toml::from_str(text).map_err(|err| match err.span() {
@@ -152,60 +25,47 @@ impl Manifest {
             params.insert(name.clone(), parse_param(&src, name, raw_param)?);
         }
 
+        // A hook may not touch a parameter's own target, and a `set` may not live inside a
+        // path the same hook removes: both would make the outcome depend on the order the
+        // edits happen to run in.
+        for (name, param) in &params {
+            for hook in &param.hooks {
+                for removed in &hook.remove {
+                    for set in &hook.set {
+                        if set.target.starts_with(removed.as_slice()) {
+                            return Err(LoadError::new(
+                                LoadError::at_file(src.path),
+                                format!(
+                                    "params.{name}.hook sets {} inside the removed {}; split them into two hooks",
+                                    pointer(&set.target),
+                                    pointer(removed)
+                                ),
+                            ));
+                        }
+                    }
+                }
+                let touched = hook.remove.iter().chain(hook.set.iter().map(|s| &s.target));
+                for path in touched {
+                    if let Some((other, _)) = params
+                        .iter()
+                        .find(|(_, p)| p.target.starts_with(path.as_slice()))
+                    {
+                        return Err(LoadError::new(
+                            LoadError::at_file(src.path),
+                            format!(
+                                "params.{name}.hook touches {} which contains params.{other}'s target",
+                                pointer(path)
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
         Ok(Self {
             description: raw.description.get_ref().clone(),
             params,
         })
-    }
-
-    /// The checks that need the workflow JSON: the target must exist, be a writable leaf and
-    /// match the declared type. Every problem is collected, so one round reports them all; the
-    /// spans are gone here, so these errors carry the file but no line.
-    pub fn validate(&self, json: &Json, path: &Path) -> Result<(), Vec<LoadError>> {
-        let at = LoadError::at_file(path);
-        let mut errors = Vec::new();
-
-        for (name, param) in &self.params {
-            let pointer = param.pointer();
-            let Some(value) = json.pointer(&pointer) else {
-                errors.push(LoadError::new(
-                    at.clone(),
-                    format!("params.{name}.target={pointer} does not exist in the workflow JSON"),
-                ));
-                continue;
-            };
-
-            if !is_leaf_scalar(value) {
-                let what = match value {
-                    Json::Array(_) => "an array (a link, not a parameter)",
-                    Json::Object(_) => "an object",
-                    Json::Null => "null",
-                    _ => unreachable!("is_leaf_scalar excludes number/string/bool"),
-                };
-                errors.push(LoadError::new(
-                    at.clone(),
-                    format!("params.{name}.target={pointer} points to {what}; it must point to a leaf scalar"),
-                ));
-                continue;
-            }
-
-            if !param.ty.accepts(value) {
-                errors.push(LoadError::new(
-                    at.clone(),
-                    format!(
-                        "params.{name}.type = {} but {pointer} is {} in the workflow JSON; they are incompatible",
-                        param.ty.as_str(),
-                        json_kind(value)
-                    ),
-                ));
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
     }
 }
 
@@ -264,6 +124,25 @@ struct RawParam {
     values: Option<Spanned<Vec<Spanned<Json>>>>,
     #[serde(default)]
     description: Option<Spanned<String>>,
+    #[serde(default)]
+    hook: Vec<Spanned<RawHook>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawHook {
+    when: Spanned<String>,
+    #[serde(default)]
+    remove: Vec<Spanned<Vec<Spanned<String>>>>,
+    #[serde(default)]
+    set: Vec<Spanned<RawHookSet>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawHookSet {
+    target: Spanned<Vec<Spanned<String>>>,
+    value: Spanned<Json>,
 }
 
 fn parse_param(src: &Source<'_>, name: &str, raw: &Spanned<RawParam>) -> Result<Param, LoadError> {
@@ -452,6 +331,63 @@ fn parse_param(src: &Source<'_>, name: &str, raw: &Spanned<RawParam>) -> Result<
         }
     };
 
+    if !raw.hook.is_empty() && raw.default.is_none() {
+        let span = raw.hook.first().map(|h| h.span()).unwrap_or(0..0);
+        return Err(src.at(
+            span,
+            format!(
+                "params.{name}.hook needs default: the hook fires when the parameter is left at its default, so without one it could never run"
+            ),
+        ));
+    }
+
+    let mut hooks = Vec::with_capacity(raw.hook.len());
+    for raw_hook in &raw.hook {
+        let hook = raw_hook.get_ref();
+        if hook.when.get_ref() != "default" {
+            return Err(src.at(
+                hook.when.span(),
+                format!(
+                    "params.{name}.hook.when = \"{}\" is not supported; expected \"default\"",
+                    hook.when.get_ref()
+                ),
+            ));
+        }
+        if hook.remove.is_empty() && hook.set.is_empty() {
+            return Err(src.at(
+                raw_hook.span(),
+                format!("params.{name}.hook needs remove or set"),
+            ));
+        }
+        let mut remove = Vec::with_capacity(hook.remove.len());
+        for path in &hook.remove {
+            remove.push(path_segments(src, name, "hook.remove", path)?);
+        }
+        let mut set = Vec::with_capacity(hook.set.len());
+        for entry in &hook.set {
+            let entry = entry.get_ref();
+            let target = path_segments(src, name, "hook.set", &entry.target)?;
+            if !is_leaf_scalar(entry.value.get_ref()) {
+                return Err(src.at(
+                    entry.value.span(),
+                    format!(
+                        "params.{name}.hook.set value must be a scalar (got {})",
+                        json_kind(entry.value.get_ref())
+                    ),
+                ));
+            }
+            set.push(HookSet {
+                target,
+                value: entry.value.get_ref().clone(),
+            });
+        }
+        hooks.push(Hook {
+            when: HookWhen::Default,
+            remove,
+            set,
+        });
+    }
+
     Ok(Param {
         target,
         ty,
@@ -460,7 +396,33 @@ fn parse_param(src: &Source<'_>, name: &str, raw: &Spanned<RawParam>) -> Result<
         range,
         values,
         description: raw.description.as_ref().map(|d| d.get_ref().clone()),
+        hooks,
     })
+}
+
+fn path_segments(
+    src: &Source<'_>,
+    name: &str,
+    field: &str,
+    segments: &Spanned<Vec<Spanned<String>>>,
+) -> Result<Vec<String>, LoadError> {
+    if segments.get_ref().is_empty() {
+        return Err(src.at(
+            segments.span(),
+            format!("params.{name}.{field} must not be empty"),
+        ));
+    }
+    let mut out = Vec::with_capacity(segments.get_ref().len());
+    for segment in segments.get_ref() {
+        if segment.get_ref().is_empty() {
+            return Err(src.at(
+                segment.span(),
+                format!("params.{name}.{field} contains an empty path segment"),
+            ));
+        }
+        out.push(segment.get_ref().clone());
+    }
+    Ok(out)
 }
 
 fn number_at(
@@ -484,94 +446,8 @@ fn number_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::manifest::test_support::*;
     use serde_json::json;
-
-    const PATH: &str = "workflow.toml";
-
-    fn path() -> &'static Path {
-        Path::new(PATH)
-    }
-
-    fn parse(text: &str) -> Result<Manifest, LoadError> {
-        Manifest::parse(text, path())
-    }
-
-    fn parse_err(text: &str) -> LoadError {
-        parse(text).expect_err("must be rejected")
-    }
-
-    fn param_toml(body: &str) -> String {
-        format!("description = \"d\"\n\n[params.p]\n{body}")
-    }
-
-    fn validate_json() -> Json {
-        json!({
-            "3": {"inputs": {"seed": 1, "steps": 20, "cfg": 8.0}},
-            "4": {"inputs": {"model": ["1", 0]}},
-            "6": {"inputs": {"text": "hi"}},
-            "8": {"inputs": {"nothing": null}},
-        })
-    }
-
-    #[test]
-    fn parses_and_validates_sample_workflows() {
-        let samples = [
-            (
-                include_str!("../../sim/workflows/image_sdxl_simple.toml"),
-                include_str!("../../sim/workflows/image_sdxl_simple.json"),
-            ),
-            (
-                include_str!("../../sim/workflows/image_qwen_image_2_1_t2i.toml"),
-                include_str!("../../sim/workflows/image_qwen_image_2_1_t2i.json"),
-            ),
-            (
-                include_str!("../../sim/workflows/image_qwen_image_2_1_image_edit.toml"),
-                include_str!("../../sim/workflows/image_qwen_image_2_1_image_edit.json"),
-            ),
-        ];
-        for (toml_text, json_text) in samples {
-            let manifest = parse(toml_text).expect("the sample must parse");
-            assert!(!manifest.params.is_empty());
-            let json: Json =
-                serde_json::from_str(json_text).expect("the sample JSON must be valid");
-            manifest
-                .validate(&json, path())
-                .expect("the sample must validate");
-        }
-
-        // The shipped samples must keep the shape the tool promises: a parameter without
-        // a default is required, a random one is optional.
-        let sdxl = parse(include_str!("../../sim/workflows/image_sdxl_simple.toml")).unwrap();
-        assert!(sdxl.params["prompt"].required());
-        assert!(!sdxl.params["negative_prompt"].required());
-        assert!(sdxl.params["seed"].random);
-        assert_eq!(sdxl.params["seed"].default, None);
-        assert!(sdxl.params["width"].default.is_some());
-
-        // Image parameters are handed to the upload path instead of the JSON, so their
-        // target must be the string field that ComfyUI reads the name from.
-        let edit = parse(include_str!(
-            "../../sim/workflows/image_qwen_image_2_1_image_edit.toml"
-        ))
-        .unwrap();
-        let edit_json: Json = serde_json::from_str(include_str!(
-            "../../sim/workflows/image_qwen_image_2_1_image_edit.json"
-        ))
-        .unwrap();
-        let images: Vec<_> = edit
-            .params
-            .iter()
-            .filter(|(_, param)| param.ty == ParamType::File)
-            .collect();
-        assert!(!images.is_empty());
-        for (name, param) in images {
-            let value = edit_json
-                .pointer(&param.pointer())
-                .unwrap_or_else(|| panic!("{name} must point at a field of the sample"));
-            assert!(value.is_string(), "{name} must point at a string field");
-            assert!(!param.random, "{name} cannot be drawn");
-        }
-    }
 
     #[test]
     fn params_may_be_empty_or_absent() {
@@ -765,83 +641,91 @@ mod tests {
     }
 
     #[test]
-    fn validate_checks_pointer_existence_and_leaf_scalars() {
-        let json = validate_json();
-
-        let m = parse(&param_toml(
-            "target = [\"9\", \"inputs\", \"x\"]\ntype = \"integer\"\n",
+    fn a_hook_is_parsed_from_the_sample() {
+        let m = parse(include_str!(
+            "../../../sim/workflows/image_qwen_image_2_1_image_edit.toml"
         ))
         .unwrap();
-        let errors = m.validate(&json, path()).unwrap_err();
-        assert_eq!(errors.len(), 1);
-        assert!(
-            errors[0].message.contains("does not exist"),
-            "{}",
-            errors[0].message
+        let image2 = &m.params["image_2"];
+        assert_eq!(image2.hooks.len(), 1);
+        assert_eq!(image2.hooks[0].when, HookWhen::Default);
+        assert_eq!(
+            image2.hooks[0].remove,
+            vec![vec![
+                "459:474".to_string(),
+                "inputs".to_string(),
+                "images.image_2".to_string()
+            ]]
         );
-        assert_eq!(errors[0].at, PATH);
-
-        let m = parse(&param_toml(
-            "target = [\"4\", \"inputs\", \"model\"]\ntype = \"string\"\n",
-        ))
-        .unwrap();
-        let errors = m.validate(&json, path()).unwrap_err();
-        assert!(
-            errors[0].message.contains("a link, not a parameter"),
-            "{}",
-            errors[0].message
-        );
-
-        let m = parse(&param_toml(
-            "target = [\"3\", \"inputs\"]\ntype = \"string\"\n",
-        ))
-        .unwrap();
-        let errors = m.validate(&json, path()).unwrap_err();
-        assert!(
-            errors[0].message.contains("an object"),
-            "{}",
-            errors[0].message
-        );
-
-        let m = parse(&param_toml(
-            "target = [\"8\", \"inputs\", \"nothing\"]\ntype = \"string\"\n",
-        ))
-        .unwrap();
-        let errors = m.validate(&json, path()).unwrap_err();
-        assert!(errors[0].message.contains("null"), "{}", errors[0].message);
+        assert_eq!(image2.hooks[0].set.len(), 1);
+        assert_eq!(image2.hooks[0].set[0].value, json!(false));
+        // The default is the marker the hook fires on; it is never written to the JSON.
+        assert!(!image2.required());
+        assert_eq!(image2.default, Some(json!("")));
     }
 
     #[test]
-    fn validate_checks_type_compatibility() {
-        let json = validate_json();
+    fn hook_when_must_be_default() {
+        let err = parse_err(&param_toml(
+            "target = [\"3\", \"inputs\", \"seed\"]\ntype = \"integer\"\ndefault = 1\n[[params.p.hook]]\nwhen = \"always\"\nremove = [[\"3\", \"inputs\", \"steps\"]]\n",
+        ));
+        assert!(err.message.contains("is not supported"), "{}", err.message);
+        assert!(err.message.contains("\"default\""), "{}", err.message);
+    }
 
-        let m = parse(&param_toml(
-            "target = [\"6\", \"inputs\", \"text\"]\ntype = \"integer\"\n",
-        ))
-        .unwrap();
-        let errors = m.validate(&json, path()).unwrap_err();
+    #[test]
+    fn a_hook_needs_an_action() {
+        let err = parse_err(&param_toml(
+            "target = [\"3\", \"inputs\", \"seed\"]\ntype = \"integer\"\ndefault = 1\n[[params.p.hook]]\nwhen = \"default\"\n",
+        ));
         assert!(
-            errors[0].message.contains("incompatible"),
+            err.message.contains("needs remove or set"),
             "{}",
-            errors[0].message
-        );
-
-        let m = parse(&param_toml(
-            "target = [\"3\", \"inputs\", \"seed\"]\ntype = \"float\"\n",
-        ))
-        .unwrap();
-        assert!(
-            m.validate(&json, path()).is_ok(),
-            "an integer is valid for a float field"
+            err.message
         );
     }
 
     #[test]
-    fn validate_collects_every_error() {
-        let text = param_toml("target = [\"9\", \"inputs\", \"x\"]\ntype = \"integer\"\n")
-            + "\n[params.b]\ntarget = [\"4\", \"inputs\", \"model\"]\ntype = \"string\"\n";
-        let m = parse(&text).unwrap();
-        let errors = m.validate(&validate_json(), path()).unwrap_err();
-        assert_eq!(errors.len(), 2, "{errors:?}");
+    fn a_hook_set_value_must_be_a_scalar() {
+        let err = parse_err(&param_toml(
+            "target = [\"3\", \"inputs\", \"seed\"]\ntype = \"integer\"\ndefault = 1\n[[params.p.hook]]\nwhen = \"default\"\nset = [{ target = [\"3\", \"inputs\", \"steps\"], value = [1, 2] }]\n",
+        ));
+        assert!(err.message.contains("must be a scalar"), "{}", err.message);
+    }
+
+    #[test]
+    fn a_hook_requires_a_default() {
+        let err = parse_err(&param_toml(
+            "target = [\"3\", \"inputs\", \"seed\"]\ntype = \"integer\"\n[[params.p.hook]]\nwhen = \"default\"\nremove = [[\"3\", \"inputs\", \"steps\"]]\n",
+        ));
+        assert!(
+            err.message.contains("hook needs default"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn a_hook_may_not_touch_a_parameter_target() {
+        let err = parse_err(
+            "description = \"d\"\n\n[params.p]\ntarget = [\"3\", \"inputs\", \"seed\"]\ntype = \"integer\"\ndefault = 1\n\n[[params.p.hook]]\nwhen = \"default\"\nremove = [[\"3\", \"inputs\"]]\n",
+        );
+        assert!(
+            err.message.contains("contains params.p's target"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn a_hook_set_may_not_live_inside_its_remove() {
+        let err = parse_err(&param_toml(
+            "target = [\"3\", \"inputs\", \"seed\"]\ntype = \"integer\"\ndefault = 1\n[[params.p.hook]]\nwhen = \"default\"\nremove = [[\"3\", \"inputs\", \"cfg\"]]\nset = [{ target = [\"3\", \"inputs\", \"cfg\", \"x\"], value = 1 }]\n",
+        ));
+        assert!(
+            err.message.contains("inside the removed"),
+            "{}",
+            err.message
+        );
     }
 }

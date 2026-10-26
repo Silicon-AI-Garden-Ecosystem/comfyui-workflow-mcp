@@ -4,7 +4,9 @@
 
 use serde_json::{Map, Number, Value as Json};
 
-use crate::config::manifest::{Manifest, Param, ParamType, is_integer, is_leaf_scalar, json_kind};
+use crate::config::manifest::{
+    HookWhen, Manifest, Param, ParamType, is_integer, is_leaf_scalar, json_kind, pointer,
+};
 use crate::core::error::ParamError;
 
 /// A file parameter whose value is still a local path: the name on ComfyUI's side only
@@ -111,12 +113,17 @@ pub fn resolve(
                 write(&mut out, name, param, value)?;
             }
             None => {
+                // The default is applied like any other value; hooks run afterwards and may
+                // delete or overwrite what it wrote. An empty file path means "no file".
                 if let Some(default) = &param.default {
                     if param.ty == ParamType::File {
-                        files.push(FileSlot {
-                            pointer: param.pointer(),
-                            path: default.as_str().unwrap_or_default().to_string(),
-                        });
+                        let path = default.as_str().unwrap_or_default();
+                        if !path.is_empty() {
+                            files.push(FileSlot {
+                                pointer: param.pointer(),
+                                path: path.to_string(),
+                            });
+                        }
                     } else {
                         write(&mut out, name, param, default.clone())?;
                     }
@@ -125,7 +132,56 @@ pub fn resolve(
         }
     }
 
+    for (name, param) in &manifest.params {
+        if params.contains_key(name) {
+            continue;
+        }
+        for hook in &param.hooks {
+            match hook.when {
+                HookWhen::Default => {}
+            }
+            for path in &hook.remove {
+                if !remove_at(&mut out, path) {
+                    return Err(ParamError::BadTarget {
+                        param: name.clone(),
+                        pointer: pointer(path),
+                    });
+                }
+            }
+            for entry in &hook.set {
+                match out.pointer_mut(&pointer(&entry.target)) {
+                    Some(slot) => *slot = entry.value.clone(),
+                    None => {
+                        return Err(ParamError::BadTarget {
+                            param: name.clone(),
+                            pointer: pointer(&entry.target),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     Ok(Resolved { json: out, files })
+}
+
+/// Deleting the key is how a link is disconnected in the API JSON. There is no "set it to
+/// nothing": TOML cannot even spell null, and ComfyUI would still read the key as a value.
+fn remove_at(json: &mut Json, path: &[String]) -> bool {
+    let Some((last, parents)) = path.split_last() else {
+        return false;
+    };
+    let mut cursor = json;
+    for segment in parents {
+        match cursor.get_mut(segment) {
+            Some(next) => cursor = next,
+            None => return false,
+        }
+    }
+    match cursor {
+        Json::Object(map) => map.remove(last).is_some(),
+        _ => false,
+    }
 }
 
 fn coerce(ty: ParamType, value: &Json) -> Json {
@@ -274,7 +330,7 @@ pub fn os_rng() -> impl FnMut() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::manifest::Param;
+    use crate::config::manifest::{Hook, HookSet, HookWhen, Param};
     use serde_json::json;
 
     fn param(target: &[&str], ty: ParamType) -> Param {
@@ -286,6 +342,7 @@ mod tests {
             range: None,
             values: None,
             description: None,
+            hooks: Vec::new(),
         }
     }
 
@@ -637,5 +694,85 @@ mod tests {
             apply_files(&mut workflow, &named),
             Err("/6/inputs/other".into())
         );
+    }
+
+    fn hooked_param() -> Param {
+        let mut param = param(&["a", "inputs", "x"], ParamType::String);
+        // A hook only runs on the default branch, so it needs a default to fire on.
+        param.default = Some(json!(""));
+        param.hooks = vec![Hook {
+            when: HookWhen::Default,
+            remove: vec![vec![
+                "a".to_string(),
+                "inputs".to_string(),
+                "link".to_string(),
+            ]],
+            set: vec![HookSet {
+                target: vec!["a".to_string(), "inputs".to_string(), "flag".to_string()],
+                value: json!(false),
+            }],
+        }];
+        param
+    }
+
+    #[test]
+    fn omitting_a_hooked_parameter_removes_the_link_and_sets_constants() {
+        let manifest = manifest(&[("p", hooked_param())]);
+        let json = json!({"a": {"inputs": {"x": "old", "link": ["9", 0], "flag": true}}});
+        let out = resolve(&manifest, &json, None, &mut || 0).unwrap();
+
+        assert!(out.json["a"]["inputs"].get("link").is_none());
+        assert_eq!(out.json["a"]["inputs"]["flag"], json!(false));
+        assert_eq!(
+            out.json["a"]["inputs"]["x"],
+            json!(""),
+            "the default is written first; the hook decides what survives"
+        );
+    }
+
+    #[test]
+    fn a_hook_can_overwrite_the_default_written_before_it() {
+        let mut param = param(&["a", "inputs", "x"], ParamType::Integer);
+        param.default = Some(json!(1));
+        param.hooks = vec![Hook {
+            when: HookWhen::Default,
+            remove: Vec::new(),
+            set: vec![HookSet {
+                target: vec!["a".to_string(), "inputs".to_string(), "x".to_string()],
+                value: json!(5),
+            }],
+        }];
+        let manifest = manifest(&[("p", param)]);
+
+        let out = resolve(
+            &manifest,
+            &json!({"a": {"inputs": {"x": 0}}}),
+            None,
+            &mut || 0,
+        )
+        .unwrap();
+        assert_eq!(out.json["a"]["inputs"]["x"], json!(5));
+    }
+
+    #[test]
+    fn an_empty_file_default_creates_no_upload() {
+        let mut file = param(&["6", "inputs", "image"], ParamType::File);
+        file.default = Some(json!(""));
+        let manifest = manifest(&[("person", file)]);
+
+        let resolved = resolve(&manifest, &json(), None, &mut || 0).unwrap();
+        assert!(resolved.files.is_empty(), "{:?}", resolved.files);
+    }
+
+    #[test]
+    fn a_provided_parameter_skips_its_hook() {
+        let manifest = manifest(&[("p", hooked_param())]);
+        let json = json!({"a": {"inputs": {"x": "old", "link": ["9", 0], "flag": true}}});
+        let params = json!({"p": "new"});
+        let out = resolve(&manifest, &json, params.as_object(), &mut || 0).unwrap();
+
+        assert_eq!(out.json["a"]["inputs"]["link"], json!(["9", 0]));
+        assert_eq!(out.json["a"]["inputs"]["flag"], json!(true));
+        assert_eq!(out.json["a"]["inputs"]["x"], json!("new"));
     }
 }
