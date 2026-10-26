@@ -11,9 +11,13 @@ license = "MIT"
 # a second line with 0.8 would give us two JsonSchema traits.
 reqwest = { version = "0.13", default-features = false, features = [
   "json",
+  "multipart",
   "query",
   "rustls-no-provider",
 ] }
+# ring is already in the tree as rustls's crypto backend,
+# so this adds no build step; a separate hashing crate would.
+ring = "0.17"
 rmcp = { version = "3.7", default-features = false, features = [
   "macros",
   "server",

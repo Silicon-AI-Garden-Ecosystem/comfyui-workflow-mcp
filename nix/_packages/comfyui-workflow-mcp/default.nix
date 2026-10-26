@@ -9,7 +9,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   src = ../../..;
 
-  cargoHash = "sha256-4ZdbOmxFo5wt63nOK++YRa/QMMV5IVgBmaSmFmjqpWA=";
+  cargoHash = "sha256-ZH494r+vlZ9czuhRchlouHqdNU7fb3GN5B1nP3g6bak=";
 
   doCheck = true;
 

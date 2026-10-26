@@ -136,6 +136,8 @@ pub enum Stage {
     Submit,
     Execution,
     Download,
+    Upload,
+    Check,
 }
 
 impl Stage {
@@ -144,6 +146,8 @@ impl Stage {
             Self::Submit => "submit failed",
             Self::Execution => "execution failed",
             Self::Download => "download failed",
+            Self::Upload => "upload failed",
+            Self::Check => "check failed",
         }
     }
 }
@@ -191,6 +195,33 @@ impl fmt::Display for ComfyError {
 }
 
 impl std::error::Error for ComfyError {}
+
+/// A model-supplied path that cannot become an uploaded file: every variant names the
+/// file the caller can fix, and nothing here talks about HTTP.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileError {
+    NotAbsolute { raw: String },
+    NoExtension { path: String },
+    NotFound { path: String },
+    NotAFile { path: String },
+    Read { path: String, detail: String },
+}
+
+impl fmt::Display for FileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotAbsolute { raw } => {
+                write!(f, "file path must be absolute or start with ~: {raw}")
+            }
+            Self::NoExtension { path } => write!(f, "file path has no extension: {path}"),
+            Self::NotFound { path } => write!(f, "file not found: {path}"),
+            Self::NotAFile { path } => write!(f, "file path is not a regular file: {path}"),
+            Self::Read { path, detail } => write!(f, "failed to read file {path}: {detail}"),
+        }
+    }
+}
+
+impl std::error::Error for FileError {}
 
 /// Cut to 500 bytes: a proxy's HTML page must not become the model's context.
 pub fn preview_body(body: &str) -> String {

@@ -7,6 +7,7 @@ use serde_json::Value as Json;
 
 use crate::core::error::{ComfyError, Stage, preview_body};
 
+#[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
     base: String,
@@ -120,6 +121,78 @@ impl Client {
                 detail: pretty(&value),
             })?;
         Ok(format!("ComfyUI {version}"))
+    }
+
+    /// `HEAD` answers 200/404 with no body (measured), so a file that ComfyUI already
+    /// holds costs one round trip and zero bytes; anything else means a proxy is in the way.
+    pub async fn has_input(&self, name: &str) -> Result<bool, ComfyError> {
+        let response = self
+            .http
+            .head(self.url("/view"))
+            .query(&[("filename", name), ("type", "input")])
+            .send()
+            .await
+            .map_err(|err| self.transport(err))?;
+
+        match response.status().as_u16() {
+            200 => Ok(true),
+            404 => Ok(false),
+            status => {
+                let body = response.text().await.unwrap_or_default();
+                Err(ComfyError::HttpStatus {
+                    stage: Stage::Check,
+                    status,
+                    body: preview_body(&body),
+                })
+            }
+        }
+    }
+
+    /// The multipart part's filename is the only thing that decides the stored name; the
+    /// `filename` form field is ignored (measured). `overwrite` keeps uploads idempotent,
+    /// and the returned name is still authoritative: ComfyUI suffixes on a collision.
+    pub async fn upload_input(&self, name: &str, bytes: Vec<u8>) -> Result<String, ComfyError> {
+        let form = reqwest::multipart::Form::new()
+            .text("type", "input")
+            .text("overwrite", "true")
+            .part(
+                "image",
+                reqwest::multipart::Part::bytes(bytes).file_name(name.to_string()),
+            );
+
+        let response = self
+            .http
+            .post(self.url("/upload/image"))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|err| self.transport(err))?;
+        let status = response.status().as_u16();
+        let body = response.text().await.map_err(|err| self.transport(err))?;
+
+        if status != 200 {
+            return Err(json_error(Stage::Upload, status, &body));
+        }
+
+        let value: Json = serde_json::from_str(&body).map_err(|_| ComfyError::HttpStatus {
+            stage: Stage::Upload,
+            status,
+            body: preview_body(&body),
+        })?;
+        let stored = value.get("name").and_then(Json::as_str);
+        let subfolder = value
+            .get("subfolder")
+            .and_then(Json::as_str)
+            .filter(|folder| !folder.is_empty());
+
+        match (subfolder, stored) {
+            (Some(folder), Some(stored)) => Ok(format!("{folder}/{stored}")),
+            (None, Some(stored)) => Ok(stored.to_string()),
+            _ => Err(ComfyError::Raw {
+                stage: Stage::Upload,
+                detail: pretty(&value),
+            }),
+        }
     }
 
     /// A 200 alone is not success: the measured rule is HTTP 200 *and* empty

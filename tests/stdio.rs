@@ -285,6 +285,29 @@ fn search_with_name_expands_params() {
 }
 
 #[test]
+fn file_parameters_are_shown_as_file_type() {
+    let search = call(
+        3,
+        "workflow_search",
+        serde_json::json!({ "name": "image_qwen_image_2_1_image_edit" }),
+    );
+    let session = session(&[INIT, LIST, &search]);
+
+    let response = session.responses.iter().find(|r| r["id"] == 3).unwrap();
+    let body: Json = serde_json::from_str(text_of(response)).unwrap();
+    let params = body["params"].as_object().unwrap();
+    let files: Vec<_> = params
+        .iter()
+        .filter(|(_, param)| param["type"] == "file")
+        .collect();
+
+    assert!(!files.is_empty(), "{body}");
+    for (name, param) in files {
+        assert_eq!(param["required"], true, "{name} has no default: {body}");
+    }
+}
+
+#[test]
 fn unknown_workflow_lists_every_name() {
     let list = call(3, "workflow_search", serde_json::json!({}));
     let unknown = call(

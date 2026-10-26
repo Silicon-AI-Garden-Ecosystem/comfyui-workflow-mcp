@@ -26,6 +26,9 @@ pub enum ParamType {
     Integer,
     Float,
     Boolean,
+    /// A path on the machine running this server: the file is uploaded to ComfyUI and
+    /// replaced by a content-addressed name before the prompt is submitted.
+    File,
 }
 
 impl ParamType {
@@ -35,6 +38,7 @@ impl ParamType {
             Self::Integer => "integer",
             Self::Float => "float",
             Self::Boolean => "boolean",
+            Self::File => "file",
         }
     }
 
@@ -44,6 +48,7 @@ impl ParamType {
             "integer" => Some(Self::Integer),
             "float" => Some(Self::Float),
             "boolean" => Some(Self::Boolean),
+            "file" => Some(Self::File),
             _ => None,
         }
     }
@@ -56,6 +61,8 @@ impl ParamType {
             Self::Integer => is_integer(value),
             Self::Float => value.is_number(),
             Self::Boolean => value.is_boolean(),
+            // The caller passes a path; the wire value is the uploaded file's name, also a string.
+            Self::File => value.is_string(),
         }
     }
 }
@@ -265,7 +272,7 @@ fn parse_param(src: &Source<'_>, name: &str, raw: &Spanned<RawParam>) -> Result<
         src.at(
             raw.ty.span(),
             format!(
-                "params.{name}.type = \"{}\" is invalid; expected string / integer / float / boolean",
+                "params.{name}.type = \"{}\" is invalid; expected string / integer / float / boolean / image",
                 raw.ty.get_ref()
             ),
         )
@@ -385,6 +392,13 @@ fn parse_param(src: &Source<'_>, name: &str, raw: &Spanned<RawParam>) -> Result<
 
     // `random` needs an explicit source, because the range is part of the contract: an
     // implicit default range would be semantics the author never wrote.
+    if random && ty == ParamType::File {
+        let span = raw.default.as_ref().map(|sp| sp.span()).unwrap_or(0..0);
+        return Err(src.at(
+            span,
+            format!("params.{name}.default = \"random\" is not valid for file parameters"),
+        ));
+    }
     if random && range.is_none() && values.is_none() {
         let span = raw.default.as_ref().map(|sp| sp.span()).unwrap_or(0..0);
         return Err(src.at(
@@ -510,6 +524,10 @@ mod tests {
                 include_str!("../../sim/workflows/image_qwen_image_2_1_t2i.toml"),
                 include_str!("../../sim/workflows/image_qwen_image_2_1_t2i.json"),
             ),
+            (
+                include_str!("../../sim/workflows/image_qwen_image_2_1_image_edit.toml"),
+                include_str!("../../sim/workflows/image_qwen_image_2_1_image_edit.json"),
+            ),
         ];
         for (toml_text, json_text) in samples {
             let manifest = parse(toml_text).expect("the sample must parse");
@@ -529,6 +547,30 @@ mod tests {
         assert!(sdxl.params["seed"].random);
         assert_eq!(sdxl.params["seed"].default, None);
         assert!(sdxl.params["width"].default.is_some());
+
+        // Image parameters are handed to the upload path instead of the JSON, so their
+        // target must be the string field that ComfyUI reads the name from.
+        let edit = parse(include_str!(
+            "../../sim/workflows/image_qwen_image_2_1_image_edit.toml"
+        ))
+        .unwrap();
+        let edit_json: Json = serde_json::from_str(include_str!(
+            "../../sim/workflows/image_qwen_image_2_1_image_edit.json"
+        ))
+        .unwrap();
+        let images: Vec<_> = edit
+            .params
+            .iter()
+            .filter(|(_, param)| param.ty == ParamType::File)
+            .collect();
+        assert!(!images.is_empty());
+        for (name, param) in images {
+            let value = edit_json
+                .pointer(&param.pointer())
+                .unwrap_or_else(|| panic!("{name} must point at a field of the sample"));
+            assert!(value.is_string(), "{name} must point at a string field");
+            assert!(!param.random, "{name} cannot be drawn");
+        }
     }
 
     #[test]

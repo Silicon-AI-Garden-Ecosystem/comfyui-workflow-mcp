@@ -7,6 +7,43 @@ use serde_json::{Map, Number, Value as Json};
 use crate::config::manifest::{Manifest, Param, ParamType, is_integer, is_leaf_scalar, json_kind};
 use crate::core::error::ParamError;
 
+/// A file parameter whose value is still a local path: the name on ComfyUI's side only
+/// exists after the file is hashed and uploaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSlot {
+    pub pointer: String,
+    pub path: String,
+}
+
+/// The workflow JSON plus the file work that is still owed to it. Deref keeps callers
+/// treating the result as the workflow itself: the slots are metadata, not the payload.
+#[derive(Debug, Clone)]
+pub struct Resolved {
+    pub json: Json,
+    pub files: Vec<FileSlot>,
+}
+
+impl std::ops::Deref for Resolved {
+    type Target = Json;
+
+    fn deref(&self) -> &Self::Target {
+        &self.json
+    }
+}
+
+/// Writes the names the server returned into the JSON. A pointer that no longer resolves
+/// means the file changed after it was loaded: rejecting the run is better than submitting a
+/// prompt that still holds a local path.
+pub fn apply_files(json: &mut Json, named: &[(String, String)]) -> Result<(), String> {
+    for (pointer, name) in named {
+        match json.pointer_mut(pointer) {
+            Some(slot) => *slot = Json::String(name.clone()),
+            None => return Err(pointer.clone()),
+        }
+    }
+    Ok(())
+}
+
 /// Two behaviours only: a `default` makes a parameter optional, no `default` makes it
 /// required. A third one (keep whatever the JSON holds) would make the result depend on
 /// whether the caller happened to pass a value.
@@ -15,7 +52,7 @@ pub fn resolve(
     json: &Json,
     params: Option<&Map<String, Json>>,
     rng: &mut dyn FnMut() -> u64,
-) -> Result<Json, ParamError> {
+) -> Result<Resolved, ParamError> {
     let empty = Map::new();
     let params = params.unwrap_or(&empty);
 
@@ -43,6 +80,7 @@ pub fn resolve(
     }
 
     let mut out = json.clone();
+    let mut files = Vec::new();
     for (name, param) in &manifest.params {
         match params.get(name) {
             Some(value) => {
@@ -53,6 +91,13 @@ pub fn resolve(
                         expected: param.ty.as_str(),
                         got: json_kind(value),
                     });
+                }
+                if param.ty == ParamType::File {
+                    files.push(FileSlot {
+                        pointer: param.pointer(),
+                        path: value.as_str().unwrap_or_default().to_string(),
+                    });
+                    continue;
                 }
                 let value = coerce(param.ty, value);
                 check_range(name, param, &value)?;
@@ -67,13 +112,20 @@ pub fn resolve(
             }
             None => {
                 if let Some(default) = &param.default {
-                    write(&mut out, name, param, default.clone())?;
+                    if param.ty == ParamType::File {
+                        files.push(FileSlot {
+                            pointer: param.pointer(),
+                            path: default.as_str().unwrap_or_default().to_string(),
+                        });
+                    } else {
+                        write(&mut out, name, param, default.clone())?;
+                    }
                 }
             }
         }
     }
 
-    Ok(out)
+    Ok(Resolved { json: out, files })
 }
 
 fn coerce(ty: ParamType, value: &Json) -> Json {
@@ -194,7 +246,7 @@ fn sample(name: &str, param: &Param, rng: &mut dyn FnMut() -> u64) -> Result<Jso
             Ok(Json::from(values[index].clone()))
         }
         // Rejected at load time; this arm only exists so the function cannot panic.
-        ParamType::Boolean => Err(ParamError::TypeMismatch {
+        ParamType::Boolean | ParamType::File => Err(ParamError::TypeMismatch {
             param: name.to_string(),
             expected: "integer / float / string",
             got: param.ty.as_str(),
@@ -529,5 +581,61 @@ mod tests {
     fn pointer_segments_are_escaped() {
         let p = param(&["a/b", "c~d"], ParamType::String);
         assert_eq!(p.pointer(), "/a~1b/c~0d");
+    }
+
+    #[test]
+    fn a_file_parameter_is_left_for_the_upload_path() {
+        let m = manifest(&[("person", param(&["6", "inputs", "image"], ParamType::File))]);
+        let mut with_file = json();
+        with_file["6"]["inputs"]["image"] = json!("old.png");
+        let params = json!({"person": "~/pics/me.png"});
+        let mut rng = counter();
+        let resolved =
+            resolve(&m, &with_file, Some(params.as_object().unwrap()), &mut rng).unwrap();
+
+        // The JSON keeps the value it had: the name only exists once the file is hashed.
+        assert_eq!(resolved.json["6"]["inputs"]["image"], json!("old.png"));
+        assert_eq!(
+            resolved.files,
+            vec![FileSlot {
+                pointer: "/6/inputs/image".to_string(),
+                path: "~/pics/me.png".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_file_default_is_also_left_for_the_upload_path() {
+        let mut file = param(&["6", "inputs", "image"], ParamType::File);
+        file.default = Some(json!("~/pics/default.png"));
+        let m = manifest(&[("person", file)]);
+        let mut rng = counter();
+        let resolved = resolve(&m, &json(), None, &mut rng).unwrap();
+        assert_eq!(resolved.files.len(), 1);
+        assert_eq!(resolved.files[0].path, "~/pics/default.png");
+    }
+
+    #[test]
+    fn apply_files_writes_the_names_the_server_returned() {
+        let mut workflow = json();
+        workflow["6"]["inputs"]["image"] = json!("old-a.png");
+        workflow["9"] = json!({"inputs": {"image": "old-b.png"}});
+        let named = vec![
+            ("/6/inputs/image".to_string(), "abc.png".to_string()),
+            ("/9/inputs/image".to_string(), "def.png".to_string()),
+        ];
+        apply_files(&mut workflow, &named).unwrap();
+        assert_eq!(workflow["6"]["inputs"]["image"], json!("abc.png"));
+        assert_eq!(workflow["9"]["inputs"]["image"], json!("def.png"));
+    }
+
+    #[test]
+    fn apply_files_rejects_a_pointer_that_no_longer_exists() {
+        let mut workflow = json();
+        let named = vec![("/6/inputs/other".to_string(), "abc.png".to_string())];
+        assert_eq!(
+            apply_files(&mut workflow, &named),
+            Err("/6/inputs/other".into())
+        );
     }
 }

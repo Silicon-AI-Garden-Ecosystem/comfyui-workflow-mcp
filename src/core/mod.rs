@@ -4,6 +4,8 @@
 pub mod comfy;
 pub mod error;
 pub mod execution;
+pub mod file;
+pub mod home;
 pub mod logging;
 pub mod output;
 pub mod overrides;

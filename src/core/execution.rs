@@ -2,23 +2,47 @@
 //! answer. The server keeps no queue, no lock and no run state: ComfyUI serializes its
 //! own queue, and a second scheduler could only ever disagree with it.
 
+use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value as Json};
 
+use tokio::task::JoinSet;
+
 use crate::config::Workflow;
 use crate::core::comfy::{self, Client};
 use crate::core::error::{ComfyError, ParamError, Stage};
+use crate::core::file;
 use crate::core::output;
 use crate::core::overrides;
+use crate::core::overrides::FileSlot;
+
+/// comfyui serializes its own queue; four uploads in flight is enough to hide latency
+/// without flooding a server that may be running on the same machine.
+const UPLOAD_CONCURRENCY: usize = 4;
 
 #[derive(Debug)]
 pub enum RunError {
     Params(ParamError),
     Comfy(ComfyError),
-    Io { path: PathBuf, detail: String },
+    /// Independent failures: pre-flight checks report all of them at once, not the first.
+    Multiple(Vec<String>),
+    /// The whole run is bounded by one deadline: a stalled connection must not outlive the
+    /// configured limit just because it is not the polling loop.
+    Timeout {
+        stage: &'static str,
+        seconds: u64,
+    },
+    /// The workflow JSON lost a field the manifest pointed at, which can only happen if the
+    /// file changed after it was loaded.
+    MissingField(String),
+    Io {
+        path: PathBuf,
+        detail: String,
+    },
 }
 
 impl fmt::Display for RunError {
@@ -26,6 +50,13 @@ impl fmt::Display for RunError {
         match self {
             Self::Params(e) => write!(f, "{e}"),
             Self::Comfy(e) => write!(f, "{e}"),
+            Self::Multiple(messages) => write!(f, "{}", messages.join("\n")),
+            Self::Timeout { stage, seconds } => {
+                write!(f, "timed out after {seconds}s while {stage}")
+            }
+            Self::MissingField(pointer) => {
+                write!(f, "the workflow JSON has no field at {pointer}")
+            }
             Self::Io { path, detail } => write!(f, "{}: {}", path.display(), detail),
         }
     }
@@ -62,12 +93,28 @@ pub async fn execute(
     timeout: Duration,
     poll_interval: Duration,
 ) -> Result<PathBuf, RunError> {
-    let prompt = overrides::resolve(
+    let deadline = Instant::now() + timeout;
+
+    let overrides::Resolved {
+        json: mut prompt,
+        files,
+    } = overrides::resolve(
         &workflow.manifest,
         &workflow.json,
         params,
         &mut overrides::os_rng(),
     )?;
+
+    // Uploads run before the run directory exists: a missing or unreadable local file must
+    // not leave an empty directory behind.
+    let names = phase(
+        deadline,
+        timeout,
+        "uploading files",
+        upload_files(client, &files),
+    )
+    .await?;
+    overrides::apply_files(&mut prompt, &names).map_err(RunError::MissingField)?;
 
     // Unique within one process only, so a nanosecond timestamp replaces a uuid.
     let nanos = SystemTime::now()
@@ -86,11 +133,18 @@ pub async fn execute(
     })?;
     write_workflow(&dir, &prompt)?;
 
-    let submitted = match client.submit(&prompt, &client_id).await {
+    let submitted = match phase(
+        deadline,
+        timeout,
+        "submitting the prompt",
+        client.submit(&prompt, &client_id),
+    )
+    .await
+    {
         Ok(submitted) => submitted,
         Err(err) => {
             tracing::warn!(dir = %dir.display(), error = %err, "submit failed");
-            return Err(err.into());
+            return Err(err);
         }
     };
     tracing::info!(
@@ -101,18 +155,31 @@ pub async fn execute(
         "submitted prompt"
     );
 
-    let entry = poll(client, &submitted.prompt_id, timeout, poll_interval).await?;
+    let entry = poll(
+        client,
+        &submitted.prompt_id,
+        deadline,
+        timeout,
+        poll_interval,
+    )
+    .await?;
 
-    let files = comfy::collect_files(&entry.outputs);
+    let remote = comfy::collect_files(&entry.outputs);
     tracing::info!(
         prompt_id = %submitted.prompt_id,
-        files = files.len(),
+        files = remote.len(),
         "execution finished"
     );
 
-    let mut payloads = Vec::with_capacity(files.len());
-    for file in &files {
-        let bytes = client.download(file).await?;
+    let mut payloads = Vec::with_capacity(remote.len());
+    for file in &remote {
+        let bytes = phase(
+            deadline,
+            timeout,
+            "downloading files",
+            client.download(file),
+        )
+        .await?;
         tracing::info!(
             filename = %file.filename,
             subfolder = %file.subfolder,
@@ -140,13 +207,97 @@ pub async fn execute(
     Ok(dir)
 }
 
+/// Uploading is content-addressed: identical bytes always get the same name, so one file
+/// named by two parameters is hashed once and uploaded once. Hashing finishes before any
+/// upload starts, so a local problem is reported without touching the network.
+async fn upload_files(
+    client: &Client,
+    files: &[FileSlot],
+) -> Result<Vec<(String, String)>, RunError> {
+    let mut located = Vec::with_capacity(files.len());
+    let mut failures = Vec::new();
+    for slot in files {
+        match file::locate(&slot.path) {
+            Ok((path, name)) => located.push((slot.pointer.clone(), path, name)),
+            Err(err) => failures.push(err.to_string()),
+        }
+    }
+    if !failures.is_empty() {
+        return Err(RunError::Multiple(failures));
+    }
+
+    let mut uploaded = Vec::new();
+    for window in unique_files(&located).chunks(UPLOAD_CONCURRENCY) {
+        let mut tasks = JoinSet::new();
+        for (name, path) in window {
+            let client = client.clone();
+            let name = name.clone();
+            let path = path.clone();
+            tasks.spawn(async move { upload_one(&client, &path, &name).await });
+        }
+        while let Some(joined) = tasks.join_next().await {
+            match joined {
+                Ok(Ok(pair)) => uploaded.push(pair),
+                Ok(Err(message)) => failures.push(message),
+                Err(err) => failures.push(err.to_string()),
+            }
+        }
+    }
+    if !failures.is_empty() {
+        return Err(RunError::Multiple(failures));
+    }
+
+    let mut stored_by_name: HashMap<String, String> = uploaded.into_iter().collect();
+    let mut named = Vec::with_capacity(located.len());
+    for (pointer, _, name) in located {
+        match stored_by_name.remove(&name) {
+            Some(stored) => named.push((pointer, stored)),
+            None => failures.push(format!("the upload of {name} returned no name")),
+        }
+    }
+    if failures.is_empty() {
+        Ok(named)
+    } else {
+        Err(RunError::Multiple(failures))
+    }
+}
+
+/// One entry per distinct content name, in the order the parameters asked for them.
+fn unique_files(located: &[(String, PathBuf, String)]) -> Vec<(String, PathBuf)> {
+    let mut unique: Vec<(String, PathBuf)> = Vec::with_capacity(located.len());
+    for (_, path, name) in located {
+        if !unique.iter().any(|(known, _)| known == name) {
+            unique.push((name.clone(), path.clone()));
+        }
+    }
+    unique
+}
+
+async fn upload_one(client: &Client, path: &Path, name: &str) -> Result<(String, String), String> {
+    if client
+        .has_input(name)
+        .await
+        .map_err(|err| err.to_string())?
+    {
+        return Ok((name.to_string(), name.to_string()));
+    }
+
+    let bytes = std::fs::read(path)
+        .map_err(|err| format!("failed to read file {}: {err}", path.display()))?;
+    let stored = client
+        .upload_input(name, bytes)
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok((name.to_string(), stored))
+}
+
 async fn poll(
     client: &Client,
     prompt_id: &str,
+    deadline: Instant,
     timeout: Duration,
     interval: Duration,
 ) -> Result<comfy::HistoryEntry, ComfyError> {
-    let deadline = Instant::now() + timeout;
     let mut attempt = 0u32;
 
     loop {
@@ -190,6 +341,27 @@ async fn poll(
     }
 }
 
+/// Every network phase shares one deadline: the configured limit is a promise about the
+/// whole run, not about the polling loop alone.
+async fn phase<T, E>(
+    deadline: Instant,
+    timeout: Duration,
+    stage: &'static str,
+    future: impl Future<Output = Result<T, E>>,
+) -> Result<T, RunError>
+where
+    E: Into<RunError>,
+{
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    match tokio::time::timeout(remaining, future).await {
+        Ok(result) => result.map_err(Into::into),
+        Err(_) => Err(RunError::Timeout {
+            stage,
+            seconds: timeout.as_secs(),
+        }),
+    }
+}
+
 fn write_workflow(dir: &Path, prompt: &Json) -> Result<(), RunError> {
     let path = dir.join("workflow.json");
     let bytes = serde_json::to_vec_pretty(prompt).map_err(|err| RunError::Io {
@@ -210,4 +382,56 @@ fn write_files(dir: &Path, files: Vec<(String, Vec<u8>)>) -> std::io::Result<Vec
         written.push(output::write_slot(dir, index, &ext, &bytes)?);
     }
     Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::future::pending;
+
+    #[test]
+    fn the_same_content_is_uploaded_once() {
+        let located = vec![
+            (
+                "/6/inputs/image".to_string(),
+                PathBuf::from("/a.png"),
+                "abc.png".to_string(),
+            ),
+            (
+                "/9/inputs/image".to_string(),
+                PathBuf::from("/b.png"),
+                "abc.png".to_string(),
+            ),
+            (
+                "/7/inputs/image".to_string(),
+                PathBuf::from("/c.png"),
+                "def.png".to_string(),
+            ),
+        ];
+
+        assert_eq!(
+            unique_files(&located),
+            vec![
+                ("abc.png".to_string(), PathBuf::from("/a.png")),
+                ("def.png".to_string(), PathBuf::from("/c.png")),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_phase_past_the_deadline_names_the_stage() {
+        let err = phase::<(), RunError>(
+            Instant::now(),
+            Duration::from_secs(300),
+            "uploading files",
+            pending(),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "timed out after 300s while uploading files"
+        );
+    }
 }

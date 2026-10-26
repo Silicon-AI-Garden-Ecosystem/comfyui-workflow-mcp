@@ -53,7 +53,7 @@ impl Server {
         let root = match output_root(
             args.output_path.as_deref(),
             &loaded.setting.paths.output_dir,
-            &home_dir(),
+            &crate::core::home::dir(),
         ) {
             Ok(root) => root,
             Err(err) => return Ok(fail(err)),
@@ -97,13 +97,6 @@ fn output_root(raw: Option<&str>, default_root: &Path, home: &Path) -> Result<Pa
         None => Ok(default_root.to_path_buf()),
         Some(raw) => expand_output_root(raw, home),
     }
-}
-
-/// The same `HOME` the configuration expands its own `~` with: one source of truth.
-fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
 }
 
 fn expand_output_root(raw: &str, home: &Path) -> Result<PathBuf, String> {
