@@ -1,0 +1,29 @@
+description = "Multi-image reference edit with Qwen Image 2.1"
+
+[params.prompt]
+description = "Positive prompt"
+target = ["459:484", "inputs", "on_false"]
+type = "string"
+
+[params.negative_prompt]
+description = "Negative prompt"
+target = ["459:474", "inputs", "negative_prompt"]
+type = "string"
+default = ""
+
+[params.image_1]
+description = "<Image 1>"
+target = ["470", "inputs", "image"]
+type = "file"
+
+[params.image_2]
+description = "<Image 2>"
+target = ["475", "inputs", "image"]
+type = "file"
+
+[params.seed]
+description = "Seed"
+target = ["459:458", "inputs", "seed"]
+type = "integer"
+default = "random"
+range = [0, 9007199254740991]
