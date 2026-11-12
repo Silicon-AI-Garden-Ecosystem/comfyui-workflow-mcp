@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use toml::Value;
 
+use crate::core::messages::Messages;
+
 const BUILTIN_TOML: &str = include_str!("../../sim/config.toml");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -65,6 +67,7 @@ pub struct Setting {
     pub paths: Paths,
     pub timings: Timings,
     pub descriptions: Descriptions,
+    pub messages: Messages,
 }
 
 pub fn load() -> Result<Setting, String> {

@@ -7,5 +7,6 @@ pub mod execution;
 pub mod file;
 pub mod home;
 pub mod logging;
+pub mod messages;
 pub mod output;
 pub mod overrides;

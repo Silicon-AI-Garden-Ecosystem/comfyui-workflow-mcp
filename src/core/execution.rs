@@ -16,6 +16,7 @@ use crate::config::Workflow;
 use crate::core::comfy::{self, Client};
 use crate::core::error::{ComfyError, ParamError, Stage};
 use crate::core::file;
+use crate::core::messages::{Messages, builtin, fill};
 use crate::core::output;
 use crate::core::overrides;
 use crate::core::overrides::FileSlot;
@@ -33,7 +34,7 @@ pub enum RunError {
     /// The whole run is bounded by one deadline: a stalled connection must not outlive the
     /// configured limit just because it is not the polling loop.
     Timeout {
-        stage: &'static str,
+        stage: String,
         seconds: u64,
     },
     /// The workflow JSON lost a field the manifest pointed at, which can only happen if the
@@ -45,20 +46,31 @@ pub enum RunError {
     },
 }
 
+impl RunError {
+    /// Every branch defers to `[messages]`; the legacy `Display` below uses the builtin copy so
+    /// logs and the tests that predate the table keep their exact wording.
+    pub fn render(&self, messages: &Messages) -> String {
+        let run = &messages.run;
+        match self {
+            Self::Params(err) => err.render(messages),
+            Self::Comfy(err) => err.render(messages),
+            Self::Multiple(items) => items.join(&run.multiple_separator),
+            Self::Timeout { stage, seconds } => fill(
+                &run.timeout,
+                &[("seconds", &seconds.to_string()), ("stage", stage)],
+            ),
+            Self::MissingField(pointer) => fill(&run.missing_field, &[("pointer", pointer)]),
+            Self::Io { path, detail } => fill(
+                &run.io,
+                &[("path", &path.display().to_string()), ("detail", detail)],
+            ),
+        }
+    }
+}
+
 impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Params(e) => write!(f, "{e}"),
-            Self::Comfy(e) => write!(f, "{e}"),
-            Self::Multiple(messages) => write!(f, "{}", messages.join("\n")),
-            Self::Timeout { stage, seconds } => {
-                write!(f, "timed out after {seconds}s while {stage}")
-            }
-            Self::MissingField(pointer) => {
-                write!(f, "the workflow JSON has no field at {pointer}")
-            }
-            Self::Io { path, detail } => write!(f, "{}: {}", path.display(), detail),
-        }
+        f.write_str(&self.render(builtin()))
     }
 }
 
@@ -92,6 +104,7 @@ pub async fn execute(
     root: &Path,
     timeout: Duration,
     poll_interval: Duration,
+    messages: &Messages,
 ) -> Result<PathBuf, RunError> {
     let deadline = Instant::now() + timeout;
 
@@ -110,8 +123,8 @@ pub async fn execute(
     let names = phase(
         deadline,
         timeout,
-        "uploading files",
-        upload_files(client, &files),
+        &messages.run.stage_upload,
+        upload_files(client, &files, messages),
     )
     .await?;
     overrides::apply_files(&mut prompt, &names).map_err(RunError::MissingField)?;
@@ -140,7 +153,7 @@ pub async fn execute(
     let submitted = match phase(
         deadline,
         timeout,
-        "submitting the prompt",
+        &messages.run.stage_submit,
         client.submit(&prompt, &client_id),
     )
     .await
@@ -180,7 +193,7 @@ pub async fn execute(
         let bytes = phase(
             deadline,
             timeout,
-            "downloading files",
+            &messages.run.stage_download,
             client.download(file),
         )
         .await?;
@@ -217,13 +230,14 @@ pub async fn execute(
 async fn upload_files(
     client: &Client,
     files: &[FileSlot],
+    messages: &Messages,
 ) -> Result<Vec<(String, String)>, RunError> {
     let mut located = Vec::with_capacity(files.len());
     let mut failures = Vec::new();
     for slot in files {
         match file::locate(&slot.path) {
             Ok((path, name)) => located.push((slot.pointer.clone(), path, name)),
-            Err(err) => failures.push(err.to_string()),
+            Err(err) => failures.push(err.render(messages)),
         }
     }
     if !failures.is_empty() {
@@ -237,7 +251,8 @@ async fn upload_files(
             let client = client.clone();
             let name = name.clone();
             let path = path.clone();
-            tasks.spawn(async move { upload_one(&client, &path, &name).await });
+            let messages = messages.clone();
+            tasks.spawn(async move { upload_one(&client, &path, &name, &messages).await });
         }
         while let Some(joined) = tasks.join_next().await {
             match joined {
@@ -252,7 +267,7 @@ async fn upload_files(
     }
 
     let stored_by_name: HashMap<String, String> = uploaded.into_iter().collect();
-    let (named, missing) = attach_names(&located, &stored_by_name);
+    let (named, missing) = attach_names(&located, &stored_by_name, messages);
     failures.extend(missing);
     if failures.is_empty() {
         Ok(named)
@@ -266,13 +281,14 @@ async fn upload_files(
 fn attach_names(
     located: &[(String, PathBuf, String)],
     stored_by_name: &HashMap<String, String>,
+    messages: &Messages,
 ) -> (Vec<(String, String)>, Vec<String>) {
     let mut named = Vec::with_capacity(located.len());
     let mut failures = Vec::new();
     for (pointer, _, name) in located {
         match stored_by_name.get(name) {
             Some(stored) => named.push((pointer.clone(), stored.clone())),
-            None => failures.push(format!("the upload of {name} returned no name")),
+            None => failures.push(fill(&messages.run.missing_upload_name, &[("name", name)])),
         }
     }
     (named, failures)
@@ -289,21 +305,33 @@ fn unique_files(located: &[(String, PathBuf, String)]) -> Vec<(String, PathBuf)>
     unique
 }
 
-async fn upload_one(client: &Client, path: &Path, name: &str) -> Result<(String, String), String> {
+async fn upload_one(
+    client: &Client,
+    path: &Path,
+    name: &str,
+    messages: &Messages,
+) -> Result<(String, String), String> {
     if client
         .has_input(name)
         .await
-        .map_err(|err| err.to_string())?
+        .map_err(|err| err.render(messages))?
     {
         return Ok((name.to_string(), name.to_string()));
     }
 
-    let bytes = std::fs::read(path)
-        .map_err(|err| format!("failed to read file {}: {err}", path.display()))?;
+    let bytes = std::fs::read(path).map_err(|err| {
+        fill(
+            &messages.files.read,
+            &[
+                ("path", &path.display().to_string()),
+                ("detail", &err.to_string()),
+            ],
+        )
+    })?;
     let stored = client
         .upload_input(name, bytes)
         .await
-        .map_err(|err| err.to_string())?;
+        .map_err(|err| err.render(messages))?;
     Ok((name.to_string(), stored))
 }
 
@@ -362,7 +390,7 @@ async fn poll(
 async fn phase<T, E>(
     deadline: Instant,
     timeout: Duration,
-    stage: &'static str,
+    stage: &str,
     future: impl Future<Output = Result<T, E>>,
 ) -> Result<T, RunError>
 where
@@ -372,7 +400,7 @@ where
     match tokio::time::timeout(remaining, future).await {
         Ok(result) => result.map_err(Into::into),
         Err(_) => Err(RunError::Timeout {
-            stage,
+            stage: stage.to_string(),
             seconds: timeout.as_secs(),
         }),
     }
@@ -436,6 +464,7 @@ mod tests {
 
     #[test]
     fn one_upload_names_every_parameter_that_shares_it() {
+        let messages = builtin();
         let located = vec![
             (
                 "/8/inputs/audio".to_string(),
@@ -450,7 +479,7 @@ mod tests {
         ];
         let stored = HashMap::from([("abc.flac".to_string(), "abc.flac".to_string())]);
 
-        let (named, failures) = attach_names(&located, &stored);
+        let (named, failures) = attach_names(&located, &stored, messages);
 
         assert!(failures.is_empty());
         assert_eq!(
@@ -464,10 +493,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_phase_past_the_deadline_names_the_stage() {
+        let messages = builtin();
         let err = phase::<(), RunError>(
             Instant::now(),
             Duration::from_secs(300),
-            "uploading files",
+            &messages.run.stage_upload,
             pending(),
         )
         .await

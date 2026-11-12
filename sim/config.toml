@@ -2,25 +2,89 @@
 # If a key is missing from the user's config.toml, use the value here.
 
 # Must be one of trace/debug/info/warn/error
-log_level        = "info"
+log_level = "info"
 
 # ${XDG_*} is expanded, falling back to the ~/.local/... default when the variable is unset.
 # Relative paths in a user config resolve against the directory of the file that declares them.
 [paths]
-env_file         = "${XDG_DATA_HOME:-~/.local/share}/comfyui-workflow-mcp/env.toml"
-logs_dir         = "${XDG_STATE_HOME:-~/.local/state}/comfyui-workflow-mcp/logs"
-output_dir       = "${XDG_CACHE_HOME:-~/.cache}/comfyui-workflow-mcp/output"
-workflows_dir    = "${XDG_DATA_HOME:-~/.local/share}/comfyui-workflow-mcp/workflows"
+env_file      = "${XDG_DATA_HOME:-~/.local/share}/comfyui-workflow-mcp/env.toml"
+logs_dir      = "${XDG_STATE_HOME:-~/.local/state}/comfyui-workflow-mcp/logs"
+output_dir    = "${XDG_CACHE_HOME:-~/.cache}/comfyui-workflow-mcp/output"
+workflows_dir = "${XDG_DATA_HOME:-~/.local/share}/comfyui-workflow-mcp/workflows"
 
 [timings]
 timeout_seconds  = 300
 poll_interval_ms = 1000
 
 [descriptions]
-search_tool       = "With no arguments, list the hosts. With `host_name`, list that host's workflows. With `host_name` and `workflow_name`, show the parameters of that workflow."
-run_tool          = "Run a workflow on a host and return the absolute path of the directory where this run's outputs are stored (one directory per run). Get `host_name`, `workflow_name` and the `params` fields from `search`. Optionally pass `output_path` to choose where the outputs are stored."
-host_name_arg     = "Host name, must match the original exactly and is case-sensitive."
-workflow_name_arg = "Workflow name on that host, must match the original exactly and is case-sensitive."
-output_path_arg   = "Optional root directory for this run's output; must be absolute or start with ~/. The run still goes into a per-run subdirectory below it."
-hint_hosts        = "Pass `host_name` to list the workflows of that host."
-hint_workflows    = "Pass `host_name` and `workflow_name` to see the parameters needed to run that workflow."
+search_tool       = """With no arguments, list the hosts. \
+With the `host_name` parameter, list that host's workflows. \
+With the `host_name` and `workflow_name` parameters, show the parameters of that workflow.
+"""
+run_tool          = """
+Run a workflow on a host and return the absolute path of the directory where this run's outputs are stored (one directory per run). \
+Get the `host_name` and `workflow_name` parameters and the `params` field from `search`. \
+Optionally pass the `output_path` parameter to choose where the outputs are stored.
+"""
+host_name_arg     = "The host name parameter; it must match the original exactly and is case-sensitive."
+workflow_name_arg = "The workflow name parameter on that host; it must match the original exactly and is case-sensitive."
+output_path_arg   = """
+Optional root directory parameter for this run's output; it must be absolute or start with ~/. \
+The run still goes into a per-run subdirectory below it.
+"""
+hint_hosts        = "Pass the `host_name` parameter to list the workflows of that host."
+hint_workflows    = "Pass the `host_name` and `workflow_name` parameters to see the parameters needed to run that workflow."
+
+# Every word a tool can return: errors, hints, list punctuation.
+# `{}` placeholders are filled from the code.
+[messages]
+list_separator = ", "
+
+[messages.comfy]
+transport       = "ComfyUI unreachable at {url}: {detail}"
+timeout         = "still running after {seconds}s ({prompt_id}); outputs will land in ComfyUI's own output directory"
+raw             = "{stage}\n{detail}"
+http_status     = "{stage}\nHTTP {status}\n{body}"
+missing_file    = "{stage}\nComfyUI has no such output file: \"{filename}\""
+stage_submit    = "submit failed"
+stage_execution = "execution failed"
+stage_download  = "download failed"
+stage_upload    = "upload failed"
+stage_check     = "check failed"
+
+[messages.files]
+not_absolute = "file path must be absolute or start with ~: {raw}"
+no_extension = "file path has no extension: {path}"
+not_found    = "file not found: {path}"
+not_a_file   = "file path is not a regular file: {path}"
+read         = "failed to read file {path}: {detail}"
+
+[messages.params]
+missing                  = "missing required parameters: {list}"
+missing_with_description = "{name} ({description})"
+missing_bare             = "{name}"
+unknown                  = "unknown parameter {names}. Available: {allowed}"
+quoted                   = '"{value}"'
+type_mismatch            = 'parameter "{param}" expects {expected}, got {got}'
+out_of_range             = 'parameter "{param}" is out of range [{min}, {max}]: {got}'
+not_in_enum              = 'parameter "{param}" must be one of: {allowed} (got "{got}")'
+bad_target               = 'parameter "{param}" targets {pointer}, which is not a writable leaf scalar'
+
+[messages.run]
+timeout             = "timed out after {seconds}s while {stage}"
+stage_upload        = "uploading files"
+stage_submit        = "submitting the prompt"
+stage_download      = "downloading files"
+missing_field       = "the workflow JSON has no field at {pointer}"
+io                  = "{path}: {detail}"
+missing_upload_name = "the upload of {name} returned no name"
+multiple_separator  = "\n"
+
+[messages.tools]
+unknown_host                       = 'unknown host "{name}". Available: {names}'
+unknown_host_without_hosts         = 'unknown host "{name}": no hosts are configured'
+unknown_workflow                   = 'unknown workflow "{name}" on host "{host}". Available: {names}'
+unknown_workflow_without_workflows = 'unknown workflow "{name}": host "{host}" has no workflows'
+workflow_name_needs_host           = "workflow_name needs host_name"
+output_path_empty                  = "output_path is empty"
+output_path_not_absolute           = "output_path must be absolute or start with ~: {raw}"

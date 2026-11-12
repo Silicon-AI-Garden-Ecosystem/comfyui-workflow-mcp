@@ -59,6 +59,18 @@ fn write_config_for(dir: &Path, workflows: &Path, extra: &str) -> PathBuf {
     path
 }
 
+/// Appends a table after `[descriptions]`; a fresh header keeps the previous keys where
+/// they were, so a test can override one message without restating the rest.
+fn append_to_config(dir: &Path, text: &str) {
+    let path = xdg_config_home(dir)
+        .join("comfyui-workflow-mcp")
+        .join("config.toml");
+    let mut body = std::fs::read_to_string(&path).unwrap();
+    body.push_str("\n\n");
+    body.push_str(text);
+    std::fs::write(path, body).unwrap();
+}
+
 fn session(requests: &[&str]) -> Session {
     let dir = TempDir::new().unwrap();
     write_config(dir.path());
@@ -538,4 +550,37 @@ fn tool_text_comes_from_the_config() {
     let detail = session.responses.iter().find(|r| r["id"] == 3).unwrap();
     let detail: Json = serde_json::from_str(text_of(detail)).unwrap();
     assert_eq!(detail["params"]["prompt"]["required"], true);
+}
+
+#[test]
+fn error_text_comes_from_the_config() {
+    let dir = TempDir::new().unwrap();
+    write_config(dir.path());
+    append_to_config(
+        dir.path(),
+        "[messages.params]\nmissing = \"MISSING: {list}\"\n\n[messages.tools]\nworkflow_name_needs_host = \"NEED HOST\"\n",
+    );
+
+    let run = call(
+        3,
+        "run",
+        serde_json::json!({ "host_name": "local", "workflow_name": "image_sdxl_simple", "params": {} }),
+    );
+    let search = call(
+        4,
+        "search",
+        serde_json::json!({ "workflow_name": "image_sdxl_simple" }),
+    );
+    let session = session_in(dir.path(), &[INIT, LIST, &run, &search]);
+
+    let run = session.responses.iter().find(|r| r["id"] == 3).unwrap();
+    assert_eq!(run["result"]["isError"], true);
+    assert!(
+        text_of(run).starts_with("MISSING: prompt"),
+        "unexpected text: {}",
+        text_of(run)
+    );
+
+    let search = session.responses.iter().find(|r| r["id"] == 4).unwrap();
+    assert_eq!(text_of(search), "NEED HOST");
 }

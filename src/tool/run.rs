@@ -15,6 +15,7 @@ use serde_json::{Map, Value as Json};
 use crate::config::{self, Descriptions};
 use crate::core::comfy::Client;
 use crate::core::execution;
+use crate::core::messages::Messages;
 
 use super::{Server, args_schema, fail, text, unknown_host, unknown_workflow};
 
@@ -40,14 +41,20 @@ impl Server {
             Err(err) => return Ok(fail(err)),
         };
 
+        let messages = &loaded.setting.messages;
         let Some(host) = loaded.workflows.host(&args.host_name) else {
-            return Ok(fail(unknown_host(&loaded.workflows, &args.host_name)));
+            return Ok(fail(unknown_host(
+                &loaded.workflows,
+                &args.host_name,
+                messages,
+            )));
         };
         let Some(workflow) = loaded.workflows.get(&args.host_name, &args.workflow_name) else {
             return Ok(fail(unknown_workflow(
                 &loaded.workflows,
                 &args.host_name,
                 &args.workflow_name,
+                messages,
             )));
         };
 
@@ -55,13 +62,14 @@ impl Server {
         // configuration: a run takes tens of seconds, which makes this negligible.
         let client = match Client::new(&host.base_url) {
             Ok(client) => client,
-            Err(err) => return Ok(fail(err.to_string())),
+            Err(err) => return Ok(fail(err.render(messages))),
         };
 
         let root = match output_root(
             args.output_path.as_deref(),
             &loaded.setting.paths.output_dir,
             &crate::core::home::dir(),
+            messages,
         ) {
             Ok(root) => root,
             Err(err) => return Ok(fail(err)),
@@ -78,11 +86,12 @@ impl Server {
             &root,
             timeout,
             poll_interval,
+            messages,
         )
         .await
         {
             Ok(dir) => Ok(text(dir.display().to_string())),
-            Err(err) => Ok(fail(err.to_string())),
+            Err(err) => Ok(fail(err.render(messages))),
         }
     }
 }
@@ -101,17 +110,24 @@ pub(super) fn tool(descriptions: &Descriptions) -> Tool {
 
 /// Only an absolute path or `~/` is accepted: the server's cwd is chosen by whoever
 /// spawned it, so a relative path would land somewhere different for every agent.
-fn output_root(raw: Option<&str>, default_root: &Path, home: &Path) -> Result<PathBuf, String> {
+fn output_root(
+    raw: Option<&str>,
+    default_root: &Path,
+    home: &Path,
+    messages: &Messages,
+) -> Result<PathBuf, String> {
     match raw {
         None => Ok(default_root.to_path_buf()),
-        Some(raw) => expand_output_root(raw, home),
+        Some(raw) => expand_output_root(raw, home, messages),
     }
 }
 
-fn expand_output_root(raw: &str, home: &Path) -> Result<PathBuf, String> {
+fn expand_output_root(raw: &str, home: &Path, messages: &Messages) -> Result<PathBuf, String> {
+    use crate::core::messages::fill;
+
     let raw = raw.trim();
     if raw.is_empty() {
-        return Err("output_path is empty".to_string());
+        return Err(messages.tools.output_path_empty.clone());
     }
 
     let path = if raw == "~" || raw.starts_with("~/") {
@@ -125,8 +141,9 @@ fn expand_output_root(raw: &str, home: &Path) -> Result<PathBuf, String> {
     };
 
     if !path.is_absolute() {
-        return Err(format!(
-            "output_path must be absolute or start with ~: {raw}"
+        return Err(fill(
+            &messages.tools.output_path_not_absolute,
+            &[("raw", raw)],
         ));
     }
     Ok(path)
@@ -135,12 +152,13 @@ fn expand_output_root(raw: &str, home: &Path) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::{expand_output_root, output_root};
+    use crate::core::messages::builtin;
     use std::path::{Path, PathBuf};
 
     #[test]
     fn absolute_output_path_is_kept() {
         assert_eq!(
-            expand_output_root("/data/out", Path::new("/home/u")).unwrap(),
+            expand_output_root("/data/out", Path::new("/home/u"), builtin()).unwrap(),
             PathBuf::from("/data/out")
         );
     }
@@ -148,31 +166,37 @@ mod tests {
     #[test]
     fn tilde_expands_to_home() {
         assert_eq!(
-            expand_output_root("~/images", Path::new("/home/u")).unwrap(),
+            expand_output_root("~/images", Path::new("/home/u"), builtin()).unwrap(),
             PathBuf::from("/home/u/images")
         );
         assert_eq!(
-            expand_output_root("~", Path::new("/home/u")).unwrap(),
+            expand_output_root("~", Path::new("/home/u"), builtin()).unwrap(),
             PathBuf::from("/home/u")
         );
-        assert!(expand_output_root("~x", Path::new("/home/u")).is_err());
+        assert!(expand_output_root("~x", Path::new("/home/u"), builtin()).is_err());
     }
 
     #[test]
     fn relative_and_empty_are_rejected() {
-        assert!(expand_output_root("out", Path::new("/home/u")).is_err());
-        assert!(expand_output_root("", Path::new("/home/u")).is_err());
-        assert!(expand_output_root("   ", Path::new("/home/u")).is_err());
+        assert!(expand_output_root("out", Path::new("/home/u"), builtin()).is_err());
+        assert!(expand_output_root("", Path::new("/home/u"), builtin()).is_err());
+        assert!(expand_output_root("   ", Path::new("/home/u"), builtin()).is_err());
     }
 
     #[test]
     fn omitting_the_override_falls_back_to_the_configured_root() {
         assert_eq!(
-            output_root(None, Path::new("/cfg/out"), Path::new("/home/u")).unwrap(),
+            output_root(None, Path::new("/cfg/out"), Path::new("/home/u"), builtin()).unwrap(),
             PathBuf::from("/cfg/out")
         );
         assert_eq!(
-            output_root(Some("/other"), Path::new("/cfg/out"), Path::new("/home/u")).unwrap(),
+            output_root(
+                Some("/other"),
+                Path::new("/cfg/out"),
+                Path::new("/home/u"),
+                builtin()
+            )
+            .unwrap(),
             PathBuf::from("/other")
         );
     }

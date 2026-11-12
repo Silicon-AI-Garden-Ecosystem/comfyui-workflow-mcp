@@ -18,6 +18,7 @@ use serde::Deserialize;
 use serde_json::Value as Json;
 
 use crate::config::{self, Descriptions, Workflows};
+use crate::core::messages::{Messages, fill};
 
 pub async fn serve() -> ExitCode {
     let server = Server;
@@ -109,26 +110,42 @@ fn args_schema<T: JsonSchema + std::any::Any>(
 
 /// An unknown name lists every available name: the number of hosts and workflows is single
 /// digit, so listing them beats fuzzy matching, which would quietly run a different workflow.
-fn unknown_host(workflows: &Workflows, name: &str) -> String {
+fn unknown_host(workflows: &Workflows, name: &str, messages: &Messages) -> String {
     let names: Vec<&str> = workflows
         .hosts()
         .iter()
         .map(|host| host.name.as_str())
         .collect();
     if names.is_empty() {
-        return format!("unknown host \"{name}\": no hosts are configured");
+        return fill(
+            &messages.tools.unknown_host_without_hosts,
+            &[("name", name)],
+        );
     }
-    format!("unknown host \"{name}\". Available: {}", names.join(", "))
+    fill(
+        &messages.tools.unknown_host,
+        &[
+            ("name", name),
+            ("names", &names.join(&messages.list_separator)),
+        ],
+    )
 }
 
-fn unknown_workflow(workflows: &Workflows, host: &str, name: &str) -> String {
+fn unknown_workflow(workflows: &Workflows, host: &str, name: &str, messages: &Messages) -> String {
     let names = workflows.names_of(host);
     if names.is_empty() {
-        return format!("unknown workflow \"{name}\": host \"{host}\" has no workflows");
+        return fill(
+            &messages.tools.unknown_workflow_without_workflows,
+            &[("name", name), ("host", host)],
+        );
     }
-    format!(
-        "unknown workflow \"{name}\" on host \"{host}\". Available: {}",
-        names.join(", ")
+    fill(
+        &messages.tools.unknown_workflow,
+        &[
+            ("name", name),
+            ("host", host),
+            ("names", &names.join(&messages.list_separator)),
+        ],
     )
 }
 

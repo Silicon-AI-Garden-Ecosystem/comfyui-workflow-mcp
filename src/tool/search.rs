@@ -37,18 +37,19 @@ impl Server {
         };
         let workflows = &loaded.workflows;
         let descriptions = &loaded.setting.descriptions;
+        let messages = &loaded.setting.messages;
 
         // A workflow without a host is ambiguous as soon as two hosts share a name, so it
         // is rejected instead of guessing a host.
         let Some(host_name) = args.host_name else {
             if args.workflow_name.is_some() {
-                return Ok(fail("workflow_name needs host_name".to_string()));
+                return Ok(fail(messages.tools.workflow_name_needs_host.clone()));
             }
             return Ok(text(hosts(workflows, descriptions)));
         };
 
         if workflows.host(&host_name).is_none() {
-            return Ok(fail(unknown_host(workflows, &host_name)));
+            return Ok(fail(unknown_host(workflows, &host_name, messages)));
         }
 
         match args.workflow_name {
@@ -59,6 +60,7 @@ impl Server {
                     workflows,
                     &host_name,
                     &workflow_name,
+                    messages,
                 ))),
             },
         }

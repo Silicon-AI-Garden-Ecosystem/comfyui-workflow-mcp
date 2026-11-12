@@ -4,6 +4,8 @@
 use std::fmt;
 use std::path::Path;
 
+use crate::core::messages::{Messages, builtin, fill};
+
 /// A startup failure, anchored at a location the reader can open (`file:line`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadError {
@@ -66,70 +68,87 @@ pub enum ParamError {
     BadTarget { param: String, pointer: String },
 }
 
-impl fmt::Display for ParamError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl ParamError {
+    /// The wording lives in `[messages]`; this only decides which template and which
+    /// arguments. Lists share one separator, so a translation stays consistent.
+    pub fn render(&self, messages: &Messages) -> String {
+        let params = &messages.params;
+        let separator = messages.list_separator.as_str();
         match self {
             Self::Missing { items } => {
-                write!(f, "missing required parameters: ")?;
-                for (i, (name, description)) in items.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    match description {
-                        Some(d) => write!(f, "{name} ({d})")?,
-                        None => write!(f, "{name}")?,
-                    }
-                }
-                Ok(())
+                let list = items
+                    .iter()
+                    .map(|(name, description)| match description {
+                        Some(description) => fill(
+                            &params.missing_with_description,
+                            &[("name", name), ("description", description)],
+                        ),
+                        None => fill(&params.missing_bare, &[("name", name)]),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(separator);
+                fill(&params.missing, &[("list", &list)])
             }
-            Self::Unknown { unknown, allowed } => write!(
-                f,
-                "unknown parameter {}. Available: {}",
-                quote_all(unknown),
-                allowed.join(", ")
-            ),
+            Self::Unknown { unknown, allowed } => {
+                let names = unknown
+                    .iter()
+                    .map(|name| fill(&params.quoted, &[("value", name)]))
+                    .collect::<Vec<_>>()
+                    .join(separator);
+                fill(
+                    &params.unknown,
+                    &[("names", &names), ("allowed", &allowed.join(separator))],
+                )
+            }
             Self::TypeMismatch {
                 param,
                 expected,
                 got,
-            } => write!(f, "parameter \"{param}\" expects {expected}, got {got}"),
+            } => fill(
+                &params.type_mismatch,
+                &[("param", param), ("expected", expected), ("got", got)],
+            ),
             Self::OutOfRange {
                 param,
                 min,
                 max,
                 got,
-            } => write!(
-                f,
-                "parameter \"{param}\" is out of range [{min}, {max}]: {got}"
+            } => fill(
+                &params.out_of_range,
+                &[
+                    ("param", param),
+                    ("min", &min.to_string()),
+                    ("max", &max.to_string()),
+                    ("got", &got.to_string()),
+                ],
             ),
             Self::NotInEnum {
                 param,
                 allowed,
                 got,
-            } => write!(
-                f,
-                "parameter \"{param}\" must be one of: {} (got \"{got}\")",
-                allowed.join(", ")
+            } => fill(
+                &params.not_in_enum,
+                &[
+                    ("param", param),
+                    ("allowed", &allowed.join(separator)),
+                    ("got", got),
+                ],
             ),
-            Self::BadTarget { param, pointer } => {
-                write!(
-                    f,
-                    "parameter \"{param}\" targets {pointer}, which is not a writable leaf scalar"
-                )
-            }
+            Self::BadTarget { param, pointer } => fill(
+                &params.bad_target,
+                &[("param", param), ("pointer", pointer)],
+            ),
         }
     }
 }
 
-impl std::error::Error for ParamError {}
-
-fn quote_all(items: &[String]) -> String {
-    items
-        .iter()
-        .map(|s| format!("\"{s}\""))
-        .collect::<Vec<_>>()
-        .join(", ")
+impl fmt::Display for ParamError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.render(builtin()))
+    }
 }
+
+impl std::error::Error for ParamError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
@@ -141,13 +160,14 @@ pub enum Stage {
 }
 
 impl Stage {
-    pub fn label(self) -> &'static str {
+    pub fn label(self, messages: &Messages) -> &str {
+        let comfy = &messages.comfy;
         match self {
-            Self::Submit => "submit failed",
-            Self::Execution => "execution failed",
-            Self::Download => "download failed",
-            Self::Upload => "upload failed",
-            Self::Check => "check failed",
+            Self::Submit => &comfy.stage_submit,
+            Self::Execution => &comfy.stage_execution,
+            Self::Download => &comfy.stage_download,
+            Self::Upload => &comfy.stage_upload,
+            Self::Check => &comfy.stage_check,
         }
     }
 }
@@ -170,27 +190,47 @@ pub enum ComfyError {
     MissingFile { filename: String },
 }
 
-impl fmt::Display for ComfyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl ComfyError {
+    pub fn render(&self, messages: &Messages) -> String {
+        let comfy = &messages.comfy;
         match self {
-            Self::Transport { url, detail } => write!(f, "ComfyUI unreachable at {url}: {detail}"),
-            Self::Timeout { prompt_id, seconds } => write!(
-                f,
-                "still running after {seconds}s ({prompt_id}); outputs will land in ComfyUI's own output directory"
+            Self::Transport { url, detail } => {
+                fill(&comfy.transport, &[("url", url), ("detail", detail)])
+            }
+            Self::Timeout { prompt_id, seconds } => fill(
+                &comfy.timeout,
+                &[("seconds", &seconds.to_string()), ("prompt_id", prompt_id)],
             ),
-            Self::Raw { stage, detail } => write!(f, "{}\n{detail}", stage.label()),
+            Self::Raw { stage, detail } => fill(
+                &comfy.raw,
+                &[("stage", stage.label(messages)), ("detail", detail)],
+            ),
             Self::HttpStatus {
                 stage,
                 status,
                 body,
-            } => write!(f, "{}\nHTTP {status}\n{body}", stage.label()),
-            Self::MissingFile { filename } => {
-                write!(
-                    f,
-                    "download failed\nComfyUI has no such output file: \"{filename}\""
-                )
-            }
+            } => fill(
+                &comfy.http_status,
+                &[
+                    ("stage", stage.label(messages)),
+                    ("status", &status.to_string()),
+                    ("body", body),
+                ],
+            ),
+            Self::MissingFile { filename } => fill(
+                &comfy.missing_file,
+                &[
+                    ("stage", Stage::Download.label(messages)),
+                    ("filename", filename),
+                ],
+            ),
         }
+    }
+}
+
+impl fmt::Display for ComfyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.render(builtin()))
     }
 }
 
@@ -207,17 +247,22 @@ pub enum FileError {
     Read { path: String, detail: String },
 }
 
+impl FileError {
+    pub fn render(&self, messages: &Messages) -> String {
+        let files = &messages.files;
+        match self {
+            Self::NotAbsolute { raw } => fill(&files.not_absolute, &[("raw", raw)]),
+            Self::NoExtension { path } => fill(&files.no_extension, &[("path", path)]),
+            Self::NotFound { path } => fill(&files.not_found, &[("path", path)]),
+            Self::NotAFile { path } => fill(&files.not_a_file, &[("path", path)]),
+            Self::Read { path, detail } => fill(&files.read, &[("path", path), ("detail", detail)]),
+        }
+    }
+}
+
 impl fmt::Display for FileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotAbsolute { raw } => {
-                write!(f, "file path must be absolute or start with ~: {raw}")
-            }
-            Self::NoExtension { path } => write!(f, "file path has no extension: {path}"),
-            Self::NotFound { path } => write!(f, "file not found: {path}"),
-            Self::NotAFile { path } => write!(f, "file path is not a regular file: {path}"),
-            Self::Read { path, detail } => write!(f, "failed to read file {path}: {detail}"),
-        }
+        f.write_str(&self.render(builtin()))
     }
 }
 
