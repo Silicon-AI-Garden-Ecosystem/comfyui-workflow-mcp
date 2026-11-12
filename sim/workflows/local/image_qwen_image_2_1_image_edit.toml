@@ -1,23 +1,23 @@
-description = "Multi-image reference edit with Qwen Image 2.1"
+description = "Edit one image, with the option to refer to another image."
 
 [params.prompt]
-description = "Positive prompt"
+description = "Positive prompt."
 target = ["459:484", "inputs", "on_false"]
 type = "string"
 
 [params.negative_prompt]
-description = "Negative prompt"
+description = "Negative prompt, it only takes effect if `cfg` > 1.0."
 target = ["459:474", "inputs", "negative_prompt"]
 type = "string"
 default = ""
 
 [params.image_1]
-description = "<Image 1>"
+description = "The first reference image, use `<image1>` in your prompt."
 target = ["470", "inputs", "image"]
 type = "file"
 
 [params.image_2]
-description = "Optional <Image 2>"
+description = "The second reference image, use `<image2>` in your prompt."
 target = ["475", "inputs", "image"]
 type = "file"
 default = ""
@@ -29,8 +29,15 @@ set = [
   { target = ["459:468", "inputs", "switch"], value = false },
 ]
 
+[params.cfg]
+description = "Classifier-free guidance scale."
+target = ["459:458", "inputs", "cfg"]
+type = "float"
+default = 1.0
+range = [1.0, 3.0]
+
 [params.seed]
-description = "Seed"
+description = "Seed."
 target = ["459:458", "inputs", "seed"]
 type = "integer"
 default = "random"
