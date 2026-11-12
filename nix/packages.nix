@@ -10,8 +10,10 @@
       packages = {
         default = self'.packages.comfyui-workflow-mcp;
       }
-      // builtins.intersectAttrs (lib.genAttrs [
-        "comfyui-workflow-mcp"
-      ] (_: null)) pkgs;
+      // lib.filterAttrs (_: v: v != null) {
+        inherit (pkgs)
+          comfyui-workflow-mcp
+          ;
+      };
     };
 }

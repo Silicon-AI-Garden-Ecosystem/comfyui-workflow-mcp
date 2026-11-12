@@ -9,7 +9,7 @@
 
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    import-tree.url = "github:denful/import-tree";
+    import-tree.url = "github:denful/import-tree/main";
   };
 
   outputs =
