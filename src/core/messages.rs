@@ -79,6 +79,7 @@ pub struct ToolMessages {
     pub workflow_name_needs_host: String,
     pub output_path_empty: String,
     pub output_path_not_absolute: String,
+    pub timeout_must_be_positive: String,
 }
 
 /// Replaces `{name}` with the matching argument and leaves unknown placeholders untouched:

@@ -584,3 +584,51 @@ fn error_text_comes_from_the_config() {
     let search = session.responses.iter().find(|r| r["id"] == 4).unwrap();
     assert_eq!(text_of(search), "NEED HOST");
 }
+
+#[test]
+fn run_exposes_an_optional_timeout() {
+    let list_only = session(&[INIT, LIST]);
+    let list = list_only.responses.iter().find(|r| r["id"] == 2).unwrap();
+    let run = list["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "run")
+        .unwrap();
+
+    let timeout = &run["inputSchema"]["properties"]["timeout_seconds"];
+    assert!(timeout.is_object(), "{timeout}");
+    assert!(
+        timeout["description"]
+            .as_str()
+            .unwrap()
+            .contains("greater than 0")
+    );
+    let required: Vec<&str> = run["inputSchema"]["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap())
+        .collect();
+    assert!(!required.contains(&"timeout_seconds"), "{required:?}");
+
+    // Zero would mean "time out immediately", which is never what the caller wants.
+    let run_call = call(
+        3,
+        "run",
+        serde_json::json!({
+            "host_name": "local",
+            "workflow_name": "image_sdxl_simple",
+            "timeout_seconds": 0,
+            "params": { "prompt": "x" },
+        }),
+    );
+    let session = session(&[INIT, &run_call]);
+    let response = session.responses.iter().find(|r| r["id"] == 3).unwrap();
+    assert_eq!(response["result"]["isError"], true);
+    assert!(
+        text_of(response).contains("timeout_seconds must be greater than 0"),
+        "unexpected text: {}",
+        text_of(response)
+    );
+}

@@ -15,7 +15,7 @@ use serde_json::{Map, Value as Json};
 use crate::config::{self, Descriptions};
 use crate::core::comfy::Client;
 use crate::core::execution;
-use crate::core::messages::Messages;
+use crate::core::messages::{Messages, fill};
 
 use super::{Server, args_schema, fail, text, unknown_host, unknown_workflow};
 
@@ -27,6 +27,8 @@ pub(super) struct RunArgs {
     params: Option<Map<String, Json>>,
     #[serde(default)]
     output_path: Option<String>,
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
 }
 
 #[tool_router(router = run_router, vis = "pub(super)")]
@@ -75,7 +77,17 @@ impl Server {
             Err(err) => return Ok(fail(err)),
         };
 
-        let timeout = Duration::from_secs(loaded.setting.timings.timeout_seconds);
+        let timeout_seconds = match args.timeout_seconds {
+            None => loaded.setting.timings.timeout_seconds,
+            Some(0) => {
+                return Ok(fail(fill(
+                    &messages.tools.timeout_must_be_positive,
+                    &[("value", "0")],
+                )));
+            }
+            Some(seconds) => seconds,
+        };
+        let timeout = Duration::from_secs(timeout_seconds);
         let poll_interval = Duration::from_millis(loaded.setting.timings.poll_interval_ms);
 
         tracing::info!(host = %workflow.host, workflow = %workflow.name, "run");
@@ -104,6 +116,7 @@ pub(super) fn tool(descriptions: &Descriptions) -> Tool {
             ("host_name", &descriptions.host_name_arg),
             ("workflow_name", &descriptions.workflow_name_arg),
             ("output_path", &descriptions.output_path_arg),
+            ("timeout_seconds", &descriptions.timeout_seconds_arg),
         ]),
     )
 }
@@ -123,8 +136,6 @@ fn output_root(
 }
 
 fn expand_output_root(raw: &str, home: &Path, messages: &Messages) -> Result<PathBuf, String> {
-    use crate::core::messages::fill;
-
     let raw = raw.trim();
     if raw.is_empty() {
         return Err(messages.tools.output_path_empty.clone());

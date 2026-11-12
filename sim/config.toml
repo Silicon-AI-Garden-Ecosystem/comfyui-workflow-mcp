@@ -24,7 +24,8 @@ With the `host_name` and `workflow_name` parameters, show the parameters of that
 run_tool          = """
 Run a workflow on a host and return the absolute path of the directory where this run's outputs are stored (one directory per run). \
 Get the `host_name` and `workflow_name` parameters and the `params` field from `search`. \
-Optionally pass the `output_path` parameter to choose where the outputs are stored.
+Optionally pass the `output_path` parameter to choose where the outputs are stored. \
+Optionally pass the `timeout_seconds` parameter to override the configured timeout for this run.
 """
 host_name_arg     = "The host name parameter; it must match the original exactly and is case-sensitive."
 workflow_name_arg = "The workflow name parameter on that host; it must match the original exactly and is case-sensitive."
@@ -32,6 +33,7 @@ output_path_arg   = """
 Optional root directory parameter for this run's output; it must be absolute or start with ~/. \
 The run still goes into a per-run subdirectory below it.
 """
+timeout_seconds_arg = "Optional timeout for this run in seconds; it must be greater than 0. Defaults to the configured timeout."
 hint_hosts        = "Pass the `host_name` parameter to list the workflows of that host."
 hint_workflows    = "Pass the `host_name` and `workflow_name` parameters to see the parameters needed to run that workflow."
 
@@ -88,3 +90,4 @@ unknown_workflow_without_workflows = 'unknown workflow "{name}": host "{host}" h
 workflow_name_needs_host           = "workflow_name needs host_name"
 output_path_empty                  = "output_path is empty"
 output_path_not_absolute           = "output_path must be absolute or start with ~: {raw}"
+timeout_must_be_positive           = "timeout_seconds must be greater than 0: {value}"

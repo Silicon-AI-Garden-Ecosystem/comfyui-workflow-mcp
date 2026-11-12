@@ -56,6 +56,7 @@ pub struct Descriptions {
     pub host_name_arg: String,
     pub workflow_name_arg: String,
     pub output_path_arg: String,
+    pub timeout_seconds_arg: String,
     pub hint_hosts: String,
     pub hint_workflows: String,
 }
