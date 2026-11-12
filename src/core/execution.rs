@@ -251,19 +251,31 @@ async fn upload_files(
         return Err(RunError::Multiple(failures));
     }
 
-    let mut stored_by_name: HashMap<String, String> = uploaded.into_iter().collect();
-    let mut named = Vec::with_capacity(located.len());
-    for (pointer, _, name) in located {
-        match stored_by_name.remove(&name) {
-            Some(stored) => named.push((pointer, stored)),
-            None => failures.push(format!("the upload of {name} returned no name")),
-        }
-    }
+    let stored_by_name: HashMap<String, String> = uploaded.into_iter().collect();
+    let (named, missing) = attach_names(&located, &stored_by_name);
+    failures.extend(missing);
     if failures.is_empty() {
         Ok(named)
     } else {
         Err(RunError::Multiple(failures))
     }
+}
+
+/// One content can be named by several parameters, so the lookup must not consume the entry
+/// the next pointer needs.
+fn attach_names(
+    located: &[(String, PathBuf, String)],
+    stored_by_name: &HashMap<String, String>,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let mut named = Vec::with_capacity(located.len());
+    let mut failures = Vec::new();
+    for (pointer, _, name) in located {
+        match stored_by_name.get(name) {
+            Some(stored) => named.push((pointer.clone(), stored.clone())),
+            None => failures.push(format!("the upload of {name} returned no name")),
+        }
+    }
+    (named, failures)
 }
 
 /// One entry per distinct content name, in the order the parameters asked for them.
@@ -418,6 +430,34 @@ mod tests {
             vec![
                 ("abc.png".to_string(), PathBuf::from("/a.png")),
                 ("def.png".to_string(), PathBuf::from("/c.png")),
+            ]
+        );
+    }
+
+    #[test]
+    fn one_upload_names_every_parameter_that_shares_it() {
+        let located = vec![
+            (
+                "/8/inputs/audio".to_string(),
+                PathBuf::from("/a.flac"),
+                "abc.flac".to_string(),
+            ),
+            (
+                "/11/inputs/audio".to_string(),
+                PathBuf::from("/a.flac"),
+                "abc.flac".to_string(),
+            ),
+        ];
+        let stored = HashMap::from([("abc.flac".to_string(), "abc.flac".to_string())]);
+
+        let (named, failures) = attach_names(&located, &stored);
+
+        assert!(failures.is_empty());
+        assert_eq!(
+            named,
+            vec![
+                ("/8/inputs/audio".to_string(), "abc.flac".to_string()),
+                ("/11/inputs/audio".to_string(), "abc.flac".to_string()),
             ]
         );
     }
