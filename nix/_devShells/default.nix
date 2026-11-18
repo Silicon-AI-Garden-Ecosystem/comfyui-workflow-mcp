@@ -11,7 +11,7 @@ pkgs.mkShell {
     nixd
     nixfmt
     nixfmt-tree
-    nix-output-monitor
+    rom
     rust-analyzer
     rustc
     rustfmt

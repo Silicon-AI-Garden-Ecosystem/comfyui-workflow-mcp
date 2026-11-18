@@ -2,7 +2,7 @@ build-dev *args:
     cargo build -- {{args}}
 
 build-nix *args:
-    nom build .#default -- {{args}}
+    rom build .#default -- {{args}}
 
 build-release *args:
     cargo build --release -- {{args}}
@@ -21,7 +21,7 @@ run-dev *args:
     cargo run -- {{args}}
 
 run-nix *args:
-    nix run .#default -- {{args}} |& nom
+    rom run .#default -- {{args}}
 
 run-release *args:
     cargo run --release -- {{args}}
