@@ -1,30 +1,31 @@
 build-dev *args:
-    cargo build -- {{args}}
+    cargo build -- {{ args }}
 
 build-nix *args:
-    rom build .#default -- {{args}}
+    rom build .#default -- {{ args }}
 
 build-release *args:
-    cargo build --release -- {{args}}
+    cargo build --release -- {{ args }}
 
 clean *args:
-    cargo clean -- {{args}}
+    cargo clean -- {{ args }}
 
 format:
+    just --fmt
     treefmt .
     cargo fmt
 
 install *args:
-    cargo fetch -- {{args}}
+    cargo fetch -- {{ args }}
 
 run-dev *args:
-    cargo run -- {{args}}
+    cargo run -- {{ args }}
 
 run-nix *args:
-    rom run .#default -- {{args}}
+    rom run .#default -- {{ args }}
 
 run-release *args:
-    cargo run --release -- {{args}}
+    cargo run --release -- {{ args }}
 
 show:
     nix flake show
