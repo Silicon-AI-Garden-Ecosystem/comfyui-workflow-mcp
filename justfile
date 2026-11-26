@@ -14,6 +14,7 @@ format:
     just --fmt
     treefmt .
     cargo fmt
+    dprint fmt
 
 install *args:
     cargo fetch -- {{ args }}
