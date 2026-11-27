@@ -39,6 +39,7 @@ pub struct Paths {
     pub logs_dir: PathBuf,
     pub output_dir: PathBuf,
     pub workflows_dir: PathBuf,
+    pub default_args_file: PathBuf,
 }
 
 #[derive(Debug, PartialEq, Deserialize)]
@@ -57,6 +58,7 @@ pub struct Descriptions {
     pub workflow_name_arg: String,
     pub output_path_arg: String,
     pub timeout_seconds_arg: String,
+    pub default_args_note: String,
     pub hint_hosts: String,
     pub hint_workflows: String,
 }

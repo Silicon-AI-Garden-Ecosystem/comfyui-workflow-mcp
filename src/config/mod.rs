@@ -2,11 +2,13 @@
 //! two are files the user owns, the third is a directory that may still be empty. A broken
 //! workflow never fails the configuration -- it stays out of the set and the reason is logged.
 
+mod default_args;
 mod env;
 pub(crate) mod manifest;
 mod setting;
 mod workflow;
 
+pub use default_args::DefaultArgs;
 pub use env::{Env, Host};
 pub use manifest::{Manifest, Param, ParamType};
 pub use setting::{Descriptions, LogLevel, Setting};
@@ -17,6 +19,10 @@ pub struct Config {
     pub setting: Setting,
     pub env: Env,
     pub workflows: Workflows,
+    /// `Err` instead of a failed load:
+    /// a call that passes every argument never reads the file,
+    /// so only the calls that rely on it should report the problem.
+    pub default_args: Result<DefaultArgs, String>,
 }
 
 pub fn load() -> Result<Config, String> {
@@ -26,10 +32,12 @@ pub fn load() -> Result<Config, String> {
 fn combine(setting: Setting) -> Result<Config, String> {
     let env = env::load(&setting.paths.env_file)?;
     let workflows = workflow::load(&setting.paths.workflows_dir, &env.hosts);
+    let default_args = default_args::load(&setting.paths.default_args_file);
     Ok(Config {
         setting,
         env,
         workflows,
+        default_args,
     })
 }
 

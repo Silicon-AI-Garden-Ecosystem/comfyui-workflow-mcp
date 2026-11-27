@@ -169,6 +169,19 @@ fn text_of(response: &Json) -> &str {
         .unwrap_or_else(|| panic!("no text content: {response}"))
 }
 
+// A schema with no required field omits the key entirely.
+fn required_fields(tool: &Json) -> Vec<String> {
+    tool["inputSchema"]["required"]
+        .as_array()
+        .map(|names| {
+            names
+                .iter()
+                .map(|name| name.as_str().unwrap().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn body_of(session: &Session, id: u64) -> Json {
     let response = session
         .responses
@@ -235,15 +248,22 @@ fn run_exposes_an_optional_output_path() {
             .unwrap()
             .contains("root directory")
     );
-    let required: Vec<&str> = run["inputSchema"]["required"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|name| name.as_str().unwrap())
-        .collect();
-    assert!(required.contains(&"host_name"), "{required:?}");
-    assert!(required.contains(&"workflow_name"), "{required:?}");
-    assert!(!required.contains(&"output_path"), "{required:?}");
+    let required = required_fields(run);
+    assert!(!required.contains(&"host_name".to_string()), "{required:?}");
+    assert!(
+        !required.contains(&"workflow_name".to_string()),
+        "{required:?}"
+    );
+    assert!(
+        !required.contains(&"output_path".to_string()),
+        "{required:?}"
+    );
+    for name in ["host_name", "workflow_name"] {
+        let description = run["inputSchema"]["properties"][name]["description"]
+            .as_str()
+            .unwrap();
+        assert!(description.contains("default args file"), "{description}");
+    }
 
     // The rejection happens during validation, so the test never needs a live ComfyUI.
     let run_call = call(
@@ -604,13 +624,11 @@ fn run_exposes_an_optional_timeout() {
             .unwrap()
             .contains("greater than 0")
     );
-    let required: Vec<&str> = run["inputSchema"]["required"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|name| name.as_str().unwrap())
-        .collect();
-    assert!(!required.contains(&"timeout_seconds"), "{required:?}");
+    let required = required_fields(run);
+    assert!(
+        !required.contains(&"timeout_seconds".to_string()),
+        "{required:?}"
+    );
 
     // Zero would mean "time out immediately", which is never what the caller wants.
     let run_call = call(
@@ -631,4 +649,105 @@ fn run_exposes_an_optional_timeout() {
         "unexpected text: {}",
         text_of(response)
     );
+}
+
+// The defaults path is derived from `XDG_STATE_HOME`, the only lever a test has.
+fn defaults_path(dir: &Path) -> PathBuf {
+    dir.join("state/comfyui-workflow-mcp/default_args.toml")
+}
+
+fn write_defaults(dir: &Path, text: &str) {
+    let path = defaults_path(dir);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+// A copied name would go stale the day the fixture is renamed.
+fn first_builtin_workflow() -> String {
+    let mut names: Vec<String> = std::fs::read_dir(workflows_dir().join("local"))
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.extension()? == "json")
+                .then(|| path.file_stem().unwrap().to_string_lossy().into_owned())
+        })
+        .collect();
+    names.sort();
+    names.remove(0)
+}
+
+#[test]
+fn run_needs_host_and_workflow_without_a_defaults_file() {
+    let run = call(3, "run", serde_json::json!({ "params": {} }));
+    let session = session(&[INIT, &run]);
+    let response = session.responses.iter().find(|r| r["id"] == 3).unwrap();
+
+    assert_eq!(response["result"]["isError"], true);
+    let text = text_of(response);
+    assert!(text.contains("host_name is required"), "{text}");
+    assert!(text.contains("default_args.toml"), "{text}");
+}
+
+#[test]
+fn a_defaults_file_with_only_a_host_still_requires_the_workflow() {
+    let dir = TempDir::new().unwrap();
+    write_config(dir.path());
+    write_defaults(dir.path(), "host_name = \"local\"\n");
+
+    let run = call(3, "run", serde_json::json!({ "params": {} }));
+    let session = session_in(dir.path(), &[INIT, &run]);
+    let response = session.responses.iter().find(|r| r["id"] == 3).unwrap();
+
+    assert_eq!(response["result"]["isError"], true);
+    assert!(
+        text_of(response).contains("workflow_name is required"),
+        "{}",
+        text_of(response)
+    );
+}
+
+#[test]
+fn run_resolves_host_and_workflow_from_the_defaults_file() {
+    let dir = TempDir::new().unwrap();
+    write_config(dir.path());
+    let workflow = first_builtin_workflow();
+    write_defaults(
+        dir.path(),
+        &format!("host_name = \"local\"\nworkflow_name = \"{workflow}\"\n"),
+    );
+
+    let run = call(3, "run", serde_json::json!({ "params": {} }));
+    let session = session_in(dir.path(), &[INIT, &run]);
+    let response = session.responses.iter().find(|r| r["id"] == 3).unwrap();
+    let text = text_of(response);
+
+    assert_eq!(response["result"]["isError"], true);
+    assert!(!text.contains("is required"), "{text}");
+    assert!(
+        session.stderr.contains("host_defaulted=true"),
+        "{}",
+        session.stderr
+    );
+    assert!(
+        session.stderr.contains("workflow_defaulted=true"),
+        "{}",
+        session.stderr
+    );
+}
+
+#[test]
+fn a_broken_defaults_file_only_fails_calls_that_need_it() {
+    let dir = TempDir::new().unwrap();
+    write_config(dir.path());
+    write_defaults(dir.path(), "hostname = \"local\"\n");
+
+    let needs_it = call(3, "run", serde_json::json!({ "params": {} }));
+    let session = session_in(dir.path(), &[INIT, &needs_it]);
+    let response = session.responses.iter().find(|r| r["id"] == 3).unwrap();
+
+    assert_eq!(response["result"]["isError"], true);
+    let text = text_of(response);
+    assert!(text.contains("default_args.toml"), "{text}");
+    assert!(text.contains("unknown field"), "{text}");
 }

@@ -21,8 +21,10 @@ use super::{Server, args_schema, fail, text, unknown_host, unknown_workflow};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct RunArgs {
-    host_name: String,
-    workflow_name: String,
+    #[serde(default)]
+    host_name: Option<String>,
+    #[serde(default)]
+    workflow_name: Option<String>,
     #[serde(default)]
     params: Option<Map<String, Json>>,
     #[serde(default)]
@@ -44,20 +46,58 @@ impl Server {
         };
 
         let messages = &loaded.setting.messages;
-        let Some(host) = loaded.workflows.host(&args.host_name) else {
-            return Ok(fail(unknown_host(
-                &loaded.workflows,
-                &args.host_name,
-                messages,
+        let default_path = loaded.setting.paths.default_args_file.display().to_string();
+        let defaults = match &loaded.default_args {
+            Ok(defaults) => Some(defaults),
+            Err(err) if args.host_name.is_some() && args.workflow_name.is_some() => {
+                tracing::warn!(error = err.as_str(), "default args ignored");
+                None
+            }
+            Err(err) => return Ok(fail(err.clone())),
+        };
+
+        let host_defaulted = args.host_name.is_none();
+        let Some(host_name) = args
+            .host_name
+            .or_else(|| defaults.and_then(|d| d.host_name.clone()))
+        else {
+            return Ok(fail(fill(
+                &messages.tools.missing_arg,
+                &[("key", "host_name"), ("path", &default_path)],
             )));
         };
-        let Some(workflow) = loaded.workflows.get(&args.host_name, &args.workflow_name) else {
-            return Ok(fail(unknown_workflow(
-                &loaded.workflows,
-                &args.host_name,
-                &args.workflow_name,
-                messages,
+
+        let workflow_defaulted = args.workflow_name.is_none();
+        let Some(workflow_name) = args
+            .workflow_name
+            .or_else(|| defaults.and_then(|d| d.workflow_name.clone()))
+        else {
+            return Ok(fail(fill(
+                &messages.tools.missing_arg,
+                &[("key", "workflow_name"), ("path", &default_path)],
             )));
+        };
+
+        let Some(host) = loaded.workflows.host(&host_name) else {
+            let mut message = unknown_host(&loaded.workflows, &host_name, messages);
+            if host_defaulted {
+                message.push_str(&fill(
+                    &messages.tools.from_defaults,
+                    &[("path", &default_path)],
+                ));
+            }
+            return Ok(fail(message));
+        };
+        let Some(workflow) = loaded.workflows.get(&host_name, &workflow_name) else {
+            let mut message =
+                unknown_workflow(&loaded.workflows, &host_name, &workflow_name, messages);
+            if workflow_defaulted {
+                message.push_str(&fill(
+                    &messages.tools.from_defaults,
+                    &[("path", &default_path)],
+                ));
+            }
+            return Ok(fail(message));
         };
 
         // The TLS backend follows the URL scheme, so the client is rebuilt with the
@@ -67,8 +107,12 @@ impl Server {
             Err(err) => return Ok(fail(err.render(messages))),
         };
 
+        let output_path = args
+            .output_path
+            .as_deref()
+            .or_else(|| defaults.and_then(|d| d.output_path.as_deref()));
         let root = match output_root(
-            args.output_path.as_deref(),
+            output_path,
             &loaded.setting.paths.output_dir,
             &crate::core::home::dir(),
             messages,
@@ -77,7 +121,10 @@ impl Server {
             Err(err) => return Ok(fail(err)),
         };
 
-        let timeout_seconds = match args.timeout_seconds {
+        let requested_timeout = args
+            .timeout_seconds
+            .or_else(|| defaults.and_then(|d| d.timeout_seconds));
+        let timeout_seconds = match requested_timeout {
             None => loaded.setting.timings.timeout_seconds,
             Some(0) => {
                 return Ok(fail(fill(
@@ -90,7 +137,13 @@ impl Server {
         let timeout = Duration::from_secs(timeout_seconds);
         let poll_interval = Duration::from_millis(loaded.setting.timings.poll_interval_ms);
 
-        tracing::info!(host = %workflow.host, workflow = %workflow.name, "run");
+        tracing::info!(
+            host = %workflow.host,
+            workflow = %workflow.name,
+            host_defaulted,
+            workflow_defaulted,
+            "run"
+        );
         match execution::execute(
             &client,
             workflow,
@@ -109,12 +162,20 @@ impl Server {
 }
 
 pub(super) fn tool(descriptions: &Descriptions) -> Tool {
+    let host_arg = format!(
+        "{} {}",
+        descriptions.host_name_arg, descriptions.default_args_note
+    );
+    let workflow_arg = format!(
+        "{} {}",
+        descriptions.workflow_name_arg, descriptions.default_args_note
+    );
     Tool::new(
         "run",
         descriptions.run_tool.clone(),
         args_schema::<RunArgs>(&[
-            ("host_name", &descriptions.host_name_arg),
-            ("workflow_name", &descriptions.workflow_name_arg),
+            ("host_name", host_arg.as_str()),
+            ("workflow_name", workflow_arg.as_str()),
             ("output_path", &descriptions.output_path_arg),
             ("timeout_seconds", &descriptions.timeout_seconds_arg),
         ]),

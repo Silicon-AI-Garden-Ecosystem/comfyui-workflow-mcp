@@ -7,6 +7,7 @@ log_level = "info"
 # ${XDG_*} is expanded, falling back to the ~/.local/... default when the variable is unset.
 # Relative paths in a user config resolve against the directory of the file that declares them.
 [paths]
+default_args_file = "${XDG_STATE_HOME:-~/.local/state}/comfyui-workflow-mcp/default_args.toml"
 env_file = "${XDG_DATA_HOME:-~/.local/share}/comfyui-workflow-mcp/env.toml"
 logs_dir = "${XDG_STATE_HOME:-~/.local/state}/comfyui-workflow-mcp/logs"
 output_dir = "${XDG_CACHE_HOME:-~/.cache}/comfyui-workflow-mcp/output"
@@ -36,6 +37,7 @@ The run still goes into a per-run subdirectory below it.
 timeout_seconds_arg = "Optional timeout for this run in seconds; it must be greater than 0. Defaults to the configured timeout."
 hint_hosts = "Pass the `host_name` parameter to list the workflows of that host."
 hint_workflows = "Pass the `host_name` and `workflow_name` parameters to see the parameters needed to run that workflow."
+default_args_note = "Required unless the default args file sets it; check `[paths].default_args_file`."
 
 # Every word a tool can return: errors, hints, list punctuation.
 # `{}` placeholders are filled from the code.
@@ -91,3 +93,5 @@ workflow_name_needs_host = "workflow_name needs host_name"
 output_path_empty = "output_path is empty"
 output_path_not_absolute = "output_path must be absolute or start with ~: {raw}"
 timeout_must_be_positive = "timeout_seconds must be greater than 0: {value}"
+missing_arg = "{key} is required: pass it or set {key} in {path}"
+from_defaults = " (from {path})"

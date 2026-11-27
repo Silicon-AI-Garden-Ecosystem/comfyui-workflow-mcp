@@ -1,0 +1,11 @@
+# Example of the file `[paths].default_args_file` points at.
+# Copy it to ${XDG_STATE_HOME:-~/.local/state}/comfyui-workflow-mcp/default_args.toml,
+# and keep only the keys you want to default: every key is optional,
+# and a key that is absent changes nothing.
+# `run` reads it on every call, so edits apply to the next call.
+
+host_name = "local"
+workflow_name = "image_sdxl_simple"
+
+# output_path = "~/pictures/comfyui"
+# timeout_seconds = 120

@@ -40,5 +40,9 @@ pkgs.mkShell {
 
   shellHook = ''
     ln -sfn ${dprintSettings} dprint.json
+    ln -sfn "$PWD/.home/cache" "$HOME/.cache/comfyui-workflow-mcp"
+    ln -sfn "$PWD/.home/config" "$HOME/.config/comfyui-workflow-mcp"
+    ln -sfn "$PWD/.home/share" "$HOME/.local/share/comfyui-workflow-mcp"
+    ln -sfn "$PWD/.home/state" "$HOME/.local/state/comfyui-workflow-mcp"
   '';
 }

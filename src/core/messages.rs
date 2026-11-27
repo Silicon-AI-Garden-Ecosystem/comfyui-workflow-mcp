@@ -80,6 +80,8 @@ pub struct ToolMessages {
     pub output_path_empty: String,
     pub output_path_not_absolute: String,
     pub timeout_must_be_positive: String,
+    pub missing_arg: String,
+    pub from_defaults: String,
 }
 
 /// Replaces `{name}` with the matching argument and leaves unknown placeholders untouched:
