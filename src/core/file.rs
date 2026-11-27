@@ -1,9 +1,8 @@
-//! Image parameters are content-addressed: the same bytes always become the same name, so
-//! an upload is idempotent, `workflow.json` records which bytes were used, and a re-run is
-//! served from ComfyUI's input directory without touching the network.
-//!
-//! The extension is taken from the caller's file and lowercased: ComfyUI's `LoadImage`
-//! filters the input directory by extension, so a name without one is invisible there.
+//! Image parameters are content-addressed:
+//! the same bytes always become the same name,
+//! so an upload is idempotent and a re-run is served from ComfyUI's input directory.
+//! The extension is taken from the caller's file and lowercased,
+//! because `LoadImage` filters that directory by extension.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -14,8 +13,9 @@ use crate::core::home;
 const CHUNK: usize = 64 * 1024;
 const NAME_BYTES: usize = 16;
 
-/// Resolves the caller's path and hashes the file: the name is what the workflow JSON has
-/// to hold, the path is what still has to be uploaded.
+/// Resolves the caller's path and hashes the file:
+/// the name is what the workflow JSON has to hold,
+/// the path is what still has to be uploaded.
 pub fn locate(raw: &str) -> Result<(PathBuf, String), FileError> {
     locate_in(raw, &home::dir())
 }
@@ -78,8 +78,8 @@ fn extension(path: &Path) -> Result<String, FileError> {
         })
 }
 
-/// 16 bytes of SHA-256 in lowercase hex: 32 characters, short enough to copy by hand and
-/// long enough that two different files never collide by accident.
+// 16 bytes of SHA-256 in lowercase hex:
+// 32 characters, short enough to copy by hand and long enough that two different files never collide by accident.
 fn digest(path: &Path) -> Result<String, FileError> {
     let mut file = std::fs::File::open(path).map_err(|err| FileError::Read {
         path: path.display().to_string(),

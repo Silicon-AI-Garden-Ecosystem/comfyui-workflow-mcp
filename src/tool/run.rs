@@ -1,5 +1,6 @@
-//! Running is one submission and one directory of artifacts: the tool answers with the
-//! directory, because the caller knows what it sent and the artifacts carry the rest.
+//! Running is one submission and one directory of artifacts:
+//! the tool answers with the directory,
+//! because the caller knows what it sent and the artifacts carry the rest.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -100,8 +101,9 @@ impl Server {
             return Ok(fail(message));
         };
 
-        // The TLS backend follows the URL scheme, so the client is rebuilt with the
-        // configuration: a run takes tens of seconds, which makes this negligible.
+        // The TLS backend follows the URL scheme,
+        // so the client is rebuilt with the configuration:
+        // a run takes tens of seconds, which makes this negligible.
         let client = match Client::new(&host.base_url) {
             Ok(client) => client,
             Err(err) => return Ok(fail(err.render(messages))),
@@ -182,8 +184,9 @@ pub(super) fn tool(descriptions: &Descriptions) -> Tool {
     )
 }
 
-/// Only an absolute path or `~/` is accepted: the server's cwd is chosen by whoever
-/// spawned it, so a relative path would land somewhere different for every agent.
+// Only an absolute path or `~/` is accepted:
+// the server's cwd is chosen by whoever spawned it,
+// so a relative path would land somewhere different for every agent.
 fn output_root(
     raw: Option<&str>,
     default_root: &Path,

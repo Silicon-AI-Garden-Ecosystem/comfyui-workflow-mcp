@@ -1,5 +1,7 @@
-//! One error text per audience: our own pre-flight errors are worded so the model can fix
-//! them, ComfyUI's errors are forwarded unchanged. Nothing re-wraps the text.
+//! One error text per audience:
+//! our own pre-flight errors are worded so the model can fix them,
+//! ComfyUI's errors are forwarded unchanged.
+//! Nothing re-wraps the text.
 
 use std::fmt;
 use std::path::Path;
@@ -69,8 +71,9 @@ pub enum ParamError {
 }
 
 impl ParamError {
-    /// The wording lives in `[messages]`; this only decides which template and which
-    /// arguments. Lists share one separator, so a translation stays consistent.
+    /// The wording lives in `[messages]`,
+    /// this only decides which template and which arguments.
+    /// Lists share one separator, so a translation stays consistent.
     pub fn render(&self, messages: &Messages) -> String {
         let params = &messages.params;
         let separator = messages.list_separator.as_str();
@@ -236,8 +239,8 @@ impl fmt::Display for ComfyError {
 
 impl std::error::Error for ComfyError {}
 
-/// A model-supplied path that cannot become an uploaded file: every variant names the
-/// file the caller can fix, and nothing here talks about HTTP.
+/// A model-supplied path that cannot become an uploaded file:
+/// every variant names the file the caller can fix, and nothing here talks about HTTP.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileError {
     NotAbsolute { raw: String },

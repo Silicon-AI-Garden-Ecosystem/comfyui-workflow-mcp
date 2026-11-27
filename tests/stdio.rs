@@ -1,6 +1,7 @@
-//! stdout carries the protocol and nothing else: a stray `println!` does not fail loudly, it
-//! just corrupts the stream the client parses, so the contract is asserted against the real
-//! binary instead of against a mocked transport.
+//! stdout carries the protocol and nothing else:
+//! a stray `println!` does not fail loudly,
+//! it just corrupts the stream the client parses,
+//! so the contract is asserted against the real binary instead of against a mocked transport.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -20,8 +21,8 @@ fn workflows_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("sim/workflows")
 }
 
-/// The config path is fixed, so `XDG_CONFIG_HOME` is the only lever that isolates a test
-/// from the user's real configuration.
+// The config path is fixed,
+// so `XDG_CONFIG_HOME` is the only lever that isolates a test from the user's real configuration.
 fn xdg_config_home(dir: &Path) -> PathBuf {
     dir.join("xdg")
 }
@@ -30,7 +31,7 @@ fn write_config(dir: &Path) -> PathBuf {
     write_config_extra(dir, "")
 }
 
-/// The same config plus extra text in `[descriptions]`; the host list stays in `env.toml`.
+// The same config plus extra text in `[descriptions]`; the host list stays in `env.toml`.
 fn write_config_extra(dir: &Path, extra: &str) -> PathBuf {
     write_config_for(dir, &workflows_dir(), extra)
 }
@@ -59,8 +60,9 @@ fn write_config_for(dir: &Path, workflows: &Path, extra: &str) -> PathBuf {
     path
 }
 
-/// Appends a table after `[descriptions]`; a fresh header keeps the previous keys where
-/// they were, so a test can override one message without restating the rest.
+// Appends a table after `[descriptions]`,
+// a fresh header keeps the previous keys where they were,
+// so a test can override one message without restating the rest.
 fn append_to_config(dir: &Path, text: &str) {
     let path = xdg_config_home(dir)
         .join("comfyui-workflow-mcp")
@@ -386,8 +388,8 @@ fn file_parameters_are_shown_as_file_type() {
     for (name, param) in &files {
         assert_eq!(param["type"], "file", "{name}: {body}");
     }
-    // A hook makes a parameter optional without giving it a default value: the workflow
-    // drops the input instead of filling it in.
+    // A hook makes a parameter optional without giving it a default value:
+    // the workflow drops the input instead of filling it in.
     assert_eq!(params["image_1"]["required"], true, "{body}");
     assert_eq!(params["image_2"]["optional"], true, "{body}");
     assert!(params["image_2"].get("default").is_none(), "{body}");
@@ -452,7 +454,8 @@ fn runs_without_config_file_using_defaults() {
         "the startup log must name the config file path: {}",
         session.stderr
     );
-    // The default workflows directory does not exist yet, but the built-in host list does:
+    // The default workflows directory does not exist yet,
+    // but the built-in host list does:
     // the host is listed, it simply has no workflows.
     let body = body_of(&session, 3);
     assert!(!body["hosts"].as_array().unwrap().is_empty(), "{body}");

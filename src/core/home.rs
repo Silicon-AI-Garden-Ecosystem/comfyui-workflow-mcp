@@ -1,6 +1,6 @@
-//! `HOME` is the one environment variable still read for paths: a model names files as
-//! `~/...`, and config expansion has already turned every configured path into an absolute
-//! one before it gets here.
+//! `HOME` is the one environment variable still read for paths:
+//! a model names files as `~/...`,
+//! and config expansion has already turned every configured path into an absolute one before it gets here.
 
 use std::path::PathBuf;
 

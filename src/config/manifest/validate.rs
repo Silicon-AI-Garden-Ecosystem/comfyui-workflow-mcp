@@ -6,9 +6,10 @@ use super::*;
 use crate::core::error::LoadError;
 
 impl Manifest {
-    /// The checks that need the workflow JSON: the target must exist, be a writable leaf and
-    /// match the declared type. Every problem is collected, so one round reports them all; the
-    /// spans are gone here, so these errors carry the file but no line.
+    /// The checks that need the workflow JSON:
+    /// the target must exist, be a writable leaf and match the declared type.
+    /// Every problem is collected, so one round reports them all,
+    /// the spans are gone here, so these errors carry the file but no line.
     pub fn validate(&self, json: &Json, path: &Path) -> Result<(), Vec<LoadError>> {
         let at = LoadError::at_file(path);
         let mut errors = Vec::new();
@@ -105,8 +106,8 @@ mod tests {
                 .expect("the sample must validate");
         }
 
-        // The shipped samples must keep the shape the tool promises: a parameter without
-        // a default is required, a random one is optional.
+        // The shipped samples must keep the shape the tool promises:
+        // a parameter without a default is required, a random one is optional.
         let sdxl = parse(include_str!(
             "../../../sim/workflows/local/image_sdxl_simple.toml"
         ))
@@ -117,8 +118,8 @@ mod tests {
         assert_eq!(sdxl.params["seed"].default, None);
         assert!(sdxl.params["width"].default.is_some());
 
-        // Image parameters are handed to the upload path instead of the JSON, so their
-        // target must be the string field that ComfyUI reads the name from.
+        // Image parameters are handed to the upload path instead of the JSON,
+        // so their target must be the string field that ComfyUI reads the name from.
         let edit = parse(include_str!(
             "../../../sim/workflows/local/image_qwen_image_2_1_image_edit.toml"
         ))

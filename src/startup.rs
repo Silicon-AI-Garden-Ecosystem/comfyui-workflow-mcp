@@ -1,5 +1,6 @@
-//! Startup only. The tool surface re-reads the configuration and rescans the workflows
-//! on every call, so a workflow added minutes ago works without a restart.
+//! Startup only.
+//! The tool surface re-reads the configuration and rescans the workflows on every call,
+//! so a workflow added minutes ago works without a restart.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -34,8 +35,8 @@ pub async fn run() -> ExitCode {
     info!("timeout_seconds  {}", setting.timings.timeout_seconds);
     info!("poll_interval_ms {}", setting.timings.poll_interval_ms);
 
-    // No connection at startup: every spawn would pay a round trip per host. The debug
-    // probe tells a wrong address apart from wrong workflow parameters.
+    // No connection at startup: every spawn would pay a round trip per host.
+    // The debug probe tells a wrong address apart from wrong workflow parameters.
     if enabled!(Level::DEBUG) {
         for host in config.workflows.hosts() {
             match comfy::Client::new(&host.base_url) {
@@ -66,8 +67,9 @@ pub async fn run() -> ExitCode {
     crate::tool::serve().await
 }
 
-/// A broken workflow is left out of the set and the others keep working: one author's typo
-/// must not take down the server. The reason goes to the log, next to the host it belongs to.
+// A broken workflow is left out of the set and the others keep working:
+// one author's typo must not take down the server.
+// The reason goes to the log, next to the host it belongs to.
 fn log_hosts(config: &config::Config) {
     let workflows = &config.workflows;
 
@@ -98,7 +100,7 @@ fn log_hosts(config: &config::Config) {
     );
 }
 
-/// Probed once at startup: a read-only mount must surface here, not after a 30 second run.
+// Probed once at startup: a read-only mount must surface here, not after a 30 second run.
 fn prepare_output_dir(root: &Path) -> Result<(), String> {
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let probe = root.join(".write-probe");

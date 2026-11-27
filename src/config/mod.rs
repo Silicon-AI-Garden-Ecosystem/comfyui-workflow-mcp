@@ -1,6 +1,9 @@
-//! The configuration is the settings file, the address file and the workflow set: the first
-//! two are files the user owns, the third is a directory that may still be empty. A broken
-//! workflow never fails the configuration -- it stays out of the set and the reason is logged.
+//! The configuration is the settings file,
+//! the address file and the workflow set:
+//! the first two are files the user owns,
+//! the third is a directory that may still be empty.
+//! A broken workflow never fails the configuration,
+//! it stays out of the set and the reason is logged.
 
 mod default_args;
 mod env;
@@ -41,9 +44,9 @@ fn combine(setting: Setting) -> Result<Config, String> {
     })
 }
 
-/// Host names become directory names, workflow names come from file names: both must be a
-/// single path component, and enforcing it here keeps "look up by name" from ever becoming
-/// "build a path from a name".
+// Host names become directory names, workflow names come from file names:
+// both must be a single path component,
+// and enforcing it here keeps "look up by name" from ever becoming "build a path from a name".
 pub(crate) fn validate_name(kind: &str, name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err(format!("{kind} name is empty"));
@@ -92,7 +95,7 @@ mod tests {
         combine(setting::load_with(config_file, home, &no_vars)?)
     }
 
-    /// Points the config at files inside the temp dir, so the real environment stays untouched.
+    // Points the config at files inside the temp dir, so the real environment stays untouched.
     fn config_text(dir: &Path, env_file: &Path) -> String {
         format!(
             "[paths]\nenv_file = \"{}\"\nworkflows_dir = \"{}\"\n",

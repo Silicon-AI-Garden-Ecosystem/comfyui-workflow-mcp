@@ -1,7 +1,9 @@
-//! One run, one directory: a directory is the only shape that answers "what did this
-//! run produce", and the server names it, so the artifacts land somewhere predictable.
-//! The stamp is a hand-rolled UTC civil date: the machine's timezone must not change
-//! the layout, and a nix-built binary should not carry a time dependency.
+//! One run, one directory:
+//! a directory is the only shape that answers "what did this run produce",
+//! and the server names it, so the artifacts land somewhere predictable.
+//! The stamp is a hand-rolled UTC civil date:
+//! the machine's timezone must not change the layout,
+//! and a nix-built binary should not carry a time dependency.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -24,7 +26,7 @@ pub fn utc_stamp(now: SystemTime) -> String {
     )
 }
 
-/// Howard Hinnant's public-domain algorithm; the constants are the published ones.
+// Howard Hinnant's public-domain algorithm; the constants are the published ones.
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;

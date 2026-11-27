@@ -1,5 +1,7 @@
-//! The TOML half of a workflow pair is a contract for a human author, so it is read strictly:
-//! an unknown key is an error instead of a silent no-op, and every error points at its line --
+//! The TOML half of a workflow pair is a contract for a human author,
+//! so it is read strictly:
+//! an unknown key is an error instead of a silent no-op,
+//! and every error points at its line,
 //! a contract that can be misread produces a run that differs from what the author wrote.
 
 use std::collections::BTreeMap;
@@ -9,12 +11,15 @@ use serde_json::Value as Json;
 mod parse;
 mod validate;
 
-/// The reserved `default` value: the server draws this run's value from `range` / `enum`, so
-/// the drawn value is always one the workflow accepts.
+/// The reserved `default` value:
+/// the server draws this run's value from `range` / `enum`,
+/// so the drawn value is always one the workflow accepts.
 pub const RANDOM: &str = "random";
 
-/// Integer bounds are capped here: MCP clients parse JSON numbers as doubles, so a larger
-/// value comes back changed -- a silently altered seed is worse than a rejected one.
+/// Integer bounds are capped here:
+/// MCP clients parse JSON numbers as doubles,
+/// so a larger value comes back changed,
+/// a silently altered seed is worse than a rejected one.
 pub const MAX_SAFE_INT: i64 = 9_007_199_254_740_991;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,8 +158,9 @@ pub struct Manifest {
     pub params: BTreeMap<String, Param>,
 }
 
-/// A target must be a writable leaf: in ComfyUI's export an array is a link, not a value, and
-/// an object or null is not a scalar either.
+// A target must be a writable leaf:
+// in ComfyUI's export an array is a link,
+// not a value, and an object or null is not a scalar either.
 pub(crate) fn is_leaf_scalar(value: &Json) -> bool {
     matches!(value, Json::Number(_) | Json::String(_) | Json::Bool(_))
 }

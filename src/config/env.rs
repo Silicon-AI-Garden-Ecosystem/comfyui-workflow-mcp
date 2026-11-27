@@ -7,8 +7,9 @@ use serde::Deserialize;
 
 use super::validate_name;
 
-/// Endpoints are a list, not a set of keys: the file is a contract with a shape, and an
-/// array keeps the order the user wrote them in.
+// Endpoints are a list, not a set of keys:
+// the file is a contract with a shape,
+// and an array keeps the order the user wrote them in.
 const BUILTIN_ENV: &str = include_str!("../../sim/env.toml");
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -36,9 +37,10 @@ pub fn load(env_file: &Path) -> Result<Env, String> {
     }
 }
 
-/// The user file replaces the built-in host list instead of merging into it: a list has an
-/// order and a length, and half of it coming from elsewhere makes "delete a host" mean
-/// nothing. Missing entries are a parse error, so the shape stays one file.
+// The user file replaces the built-in host list instead of merging into it:
+// a list has an order and a length,
+// and half of it coming from elsewhere makes "delete a host" mean nothing.
+// Missing entries are a parse error, so the shape stays one file.
 fn parse(text: &str, at: &str) -> Result<Env, String> {
     let env: Env = toml::from_str(text).map_err(|err| format!("{at}: {err}"))?;
     let mut seen = BTreeSet::new();

@@ -1,5 +1,6 @@
-//! The domain the tools are built on: the ComfyUI wire protocol, one run, the
-//! artifacts on disk, parameter overrides, the error wording and the log sink.
+//! The domain the tools are built on:
+//! the ComfyUI wire protocol, one run, the artifacts on disk,
+//! parameter overrides, the error wording and the log sink.
 
 pub mod comfy;
 pub mod error;

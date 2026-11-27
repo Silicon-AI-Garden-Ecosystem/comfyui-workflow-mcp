@@ -25,9 +25,9 @@ impl Manifest {
             params.insert(name.clone(), parse_param(&src, name, raw_param)?);
         }
 
-        // A hook may not touch a parameter's own target, and a `set` may not live inside a
-        // path the same hook removes: both would make the outcome depend on the order the
-        // edits happen to run in.
+        // A hook may not touch a parameter's own target,
+        // and a `set` may not live inside a path the same hook removes:
+        // both would make the outcome depend on the order the edits happen to run in.
         for (name, param) in &params {
             for hook in &param.hooks {
                 for removed in &hook.remove {
@@ -269,8 +269,8 @@ fn parse_param(src: &Source<'_>, name: &str, raw: &Spanned<RawParam>) -> Result<
         }
     };
 
-    // `random` needs an explicit source, because the range is part of the contract: an
-    // implicit default range would be semantics the author never wrote.
+    // `random` needs an explicit source, because the range is part of the contract:
+    // an implicit default range would be semantics the author never wrote.
     if random && ty == ParamType::File {
         let span = raw.default.as_ref().map(|sp| sp.span()).unwrap_or(0..0);
         return Err(src.at(
@@ -659,7 +659,7 @@ mod tests {
         );
         assert_eq!(image2.hooks[0].set.len(), 1);
         assert_eq!(image2.hooks[0].set[0].value, json!(false));
-        // The default is the marker the hook fires on; it is never written to the JSON.
+        // The default is the marker the hook fires on, it is never written to the JSON.
         assert!(!image2.required());
         assert_eq!(image2.default, Some(json!("")));
     }

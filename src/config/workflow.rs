@@ -1,8 +1,6 @@
-//! The workflow set is the content of one directory per host, rescanned on every tool call:
-//! an agent may hold a server for a whole session, so a workflow added minutes ago must work
-//! without a restart. A name is a file name: what the file manager shows is what the model
-//! passes. Hosts come from `env.toml`, so a directory whose name is not a host is reported
-//! instead of being silently ignored.
+//! The workflow set is one directory per host, rescanned on every call:
+//! a server may live for a whole session, so a workflow added minutes ago must work without a restart.
+//! A name is a file name, and a directory whose name is not a host in `env.toml` is reported, not ignored.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -16,8 +14,8 @@ use super::Host;
 use super::manifest::Manifest;
 use super::validate_name;
 
-/// A workflow is `<name>.json` plus `<name>.toml`: the JSON stays as ComfyUI exports it,
-/// the TOML is the parameter contract.
+/// A workflow is `<name>.json` plus `<name>.toml`:
+/// the JSON stays as ComfyUI exports it, the TOML is the parameter contract.
 #[derive(Debug, Clone)]
 pub struct Workflow {
     pub host: String,
@@ -53,8 +51,10 @@ impl Workflows {
             .collect()
     }
 
-    /// Exact lookup on both names: the model repeats what it was shown, so a fuzzy match would
-    /// quietly run a different workflow -- or the same workflow on the wrong host.
+    /// Exact lookup on both names:
+    /// the model repeats what it was shown,
+    /// so a fuzzy match would quietly run a different workflow,
+    /// or the same workflow on the wrong host.
     pub fn get(&self, host: &str, name: &str) -> Option<&Workflow> {
         self.by_key
             .get(&(host.to_string(), name.to_string()))
@@ -128,9 +128,9 @@ pub fn load(dir: &Path, hosts: &[Host]) -> Workflows {
     workflows
 }
 
-/// Workflows live under `<workflows_dir>/<host>/`, so anything else at the top level is a
-/// layout mistake worth reporting: a flat `workflows/foo.json` would otherwise look like
-/// "my workflow disappeared" with no hint why.
+// Workflows live under `<workflows_dir>/<host>/`,
+// so anything else at the top level is a layout mistake worth reporting:
+// a flat `workflows/foo.json` would otherwise look like "my workflow disappeared" with no hint why.
 fn scan_root(dir: &Path, hosts: &[Host], broken: &mut Vec<LoadError>) -> Result<(), LoadError> {
     let at = LoadError::at_file(dir);
     let metadata = match fs::metadata(dir) {
@@ -202,8 +202,9 @@ fn scan_root(dir: &Path, hosts: &[Host], broken: &mut Vec<LoadError>) -> Result<
     Ok(())
 }
 
-/// A missing directory is an empty set, not a failure: a host may not have any workflow yet.
-/// An unreadable path is a broken entry, and so is a half pair.
+// A missing directory is an empty set, not a failure:
+// a host may not have any workflow yet.
+// An unreadable path is a broken entry, and so is a half pair.
 fn pairs(dir: &Path) -> (Vec<PathBuf>, Vec<LoadError>) {
     let at = LoadError::at_file(dir);
     let metadata = match fs::metadata(dir) {
@@ -260,8 +261,9 @@ fn pairs(dir: &Path) -> (Vec<PathBuf>, Vec<LoadError>) {
         if entry.file_name().to_string_lossy().starts_with('.') {
             continue;
         }
-        // `metadata` follows symlinks: a link to a real file counts, a broken one is skipped --
-        // without content there is no pair, and the file name stays the identity.
+        // `metadata` follows symlinks: a link to a real file counts,
+        // a broken one is skipped, without content there is no pair,
+        // and the file name stays the identity.
         match fs::metadata(&path) {
             Ok(meta) if meta.is_file() => {}
             Ok(_) | Err(_) => continue,
@@ -313,7 +315,7 @@ fn pairs(dir: &Path) -> (Vec<PathBuf>, Vec<LoadError>) {
     (paired, errors)
 }
 
-/// All errors are collected, so one broken pair reports everything wrong with it at once.
+// All errors are collected, so one broken pair reports everything wrong with it at once.
 fn load_pair(json_path: &Path, host: &str) -> Result<Workflow, Vec<LoadError>> {
     let at = LoadError::at_file(json_path);
     let toml_path = json_path.with_extension("toml");

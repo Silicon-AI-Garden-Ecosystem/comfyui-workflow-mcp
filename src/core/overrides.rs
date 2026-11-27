@@ -1,6 +1,7 @@
-//! Parameters are applied to a copy of the workflow by exact JSON pointer, never by
-//! class_type and title: default titles repeat, so a semantic match can write the
-//! positive prompt into the negative one.
+//! Parameters are applied to a copy of the workflow by exact JSON pointer,
+//! never by class_type and title:
+//! default titles repeat,
+//! so a semantic match can write the positive prompt into the negative one.
 
 use serde_json::{Map, Number, Value as Json};
 
@@ -9,16 +10,17 @@ use crate::config::manifest::{
 };
 use crate::core::error::ParamError;
 
-/// A file parameter whose value is still a local path: the name on ComfyUI's side only
-/// exists after the file is hashed and uploaded.
+/// A file parameter whose value is still a local path:
+/// the name on ComfyUI's side only exists after the file is hashed and uploaded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileSlot {
     pub pointer: String,
     pub path: String,
 }
 
-/// The workflow JSON plus the file work that is still owed to it. Deref keeps callers
-/// treating the result as the workflow itself: the slots are metadata, not the payload.
+/// The workflow JSON plus the file work that is still owed to it.
+/// Deref keeps callers treating the result as the workflow itself:
+/// the slots are metadata, not the payload.
 #[derive(Debug, Clone)]
 pub struct Resolved {
     pub json: Json,
@@ -33,9 +35,9 @@ impl std::ops::Deref for Resolved {
     }
 }
 
-/// Writes the names the server returned into the JSON. A pointer that no longer resolves
-/// means the file changed after it was loaded: rejecting the run is better than submitting a
-/// prompt that still holds a local path.
+/// Writes the names the server returned into the JSON.
+/// A pointer that no longer resolves means the file changed after it was loaded:
+/// rejecting the run is better than submitting a prompt that still holds a local path.
 pub fn apply_files(json: &mut Json, named: &[(String, String)]) -> Result<(), String> {
     for (pointer, name) in named {
         match json.pointer_mut(pointer) {
@@ -46,9 +48,10 @@ pub fn apply_files(json: &mut Json, named: &[(String, String)]) -> Result<(), St
     Ok(())
 }
 
-/// Two behaviours only: a `default` makes a parameter optional, no `default` makes it
-/// required. A third one (keep whatever the JSON holds) would make the result depend on
-/// whether the caller happened to pass a value.
+/// Two behaviours only:
+/// a `default` makes a parameter optional, no `default` makes it required.
+/// A third one (keep whatever the JSON holds),
+/// would make the result depend on whether the caller happened to pass a value.
 pub fn resolve(
     manifest: &Manifest,
     json: &Json,
@@ -107,14 +110,15 @@ pub fn resolve(
                 write(&mut out, name, param, value)?;
             }
             None if param.random => {
-                // The draw stays inside the declared range or enum: it must be a value
-                // the workflow accepts.
+                // The draw stays inside the declared range or enum:
+                // it must be a value the workflow accepts.
                 let value = sample(name, param, rng)?;
                 write(&mut out, name, param, value)?;
             }
             None => {
-                // The default is applied like any other value; hooks run afterwards and may
-                // delete or overwrite what it wrote. An empty file path means "no file".
+                // The default is applied like any other value,
+                // hooks run afterwards and may delete or overwrite what it wrote.
+                // An empty file path means "no file".
                 if let Some(default) = &param.default {
                     if param.ty == ParamType::File {
                         let path = default.as_str().unwrap_or_default();
@@ -165,8 +169,9 @@ pub fn resolve(
     Ok(Resolved { json: out, files })
 }
 
-/// Deleting the key is how a link is disconnected in the API JSON. There is no "set it to
-/// nothing": TOML cannot even spell null, and ComfyUI would still read the key as a value.
+// Deleting the key is how a link is disconnected in the API JSON.
+// There is no "set it to nothing":
+// TOML cannot even spell null, and ComfyUI would still read the key as a value.
 fn remove_at(json: &mut Json, path: &[String]) -> bool {
     let Some((last, parents)) = path.split_last() else {
         return false;
@@ -191,8 +196,9 @@ fn coerce(ty: ParamType, value: &Json) -> Json {
     }
 }
 
-/// `serde_json` cannot hold infinity or NaN, so a non-finite float becomes `0`: one bad
-/// number must not sink the whole submit.
+// `serde_json` cannot hold infinity or NaN,
+// so a non-finite float becomes `0`:
+// one bad number must not sink the whole submit.
 fn number(value: f64) -> Json {
     Json::Number(Number::from_f64(value).unwrap_or_else(|| Number::from(0i64)))
 }
@@ -252,8 +258,8 @@ fn write(out: &mut Json, name: &str, param: &Param, value: Json) -> Result<(), P
 fn sample(name: &str, param: &Param, rng: &mut dyn FnMut() -> u64) -> Result<Json, ParamError> {
     match param.ty {
         ParamType::Integer => {
-            // The range is part of the contract, so it is required: a random parameter
-            // without one never reaches a run.
+            // The range is part of the contract, so it is required:
+            // a random parameter without one never reaches a run.
             let Some((min, max)) = param.range else {
                 return Err(ParamError::TypeMismatch {
                     param: name.to_string(),
@@ -310,7 +316,8 @@ fn sample(name: &str, param: &Param, rng: &mut dyn FnMut() -> u64) -> Result<Jso
     }
 }
 
-/// The bytes come from `/dev/urandom`; if it cannot be opened the clock is used instead,
+/// The bytes come from `/dev/urandom`,
+/// if it cannot be opened the clock is used instead,
 /// because degraded randomness beats failing the whole run.
 pub fn os_rng() -> impl FnMut() -> u64 {
     use std::io::Read;

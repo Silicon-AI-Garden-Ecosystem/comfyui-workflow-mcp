@@ -1,6 +1,7 @@
-//! Searching is how a model finds out what exists: first the hosts, then the workflows of
-//! one host, then the parameters of one workflow. Each step stays small, and the next step
-//! is a hint in the answer rather than a paragraph in the tool description.
+//! Searching is how a model finds out what exists:
+//! first the hosts, then the workflows of one host,
+//! then the parameters of one workflow. Each step stays small,
+//! and the next step is a hint in the answer rather than a paragraph in the tool description.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Tool};
@@ -14,8 +15,9 @@ use crate::config::{self, Descriptions, Param, ParamType, Workflow, Workflows};
 
 use super::{Server, args_schema, fail, text, unknown_host, unknown_workflow};
 
-/// The field help is not written here: `list_tools` overwrites the schema descriptions
-/// from `[descriptions]`, so the wording has a single source.
+// The field help is not written here:
+// `list_tools` overwrites the schema descriptions from `[descriptions]`,
+// so the wording has a single source.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct SearchArgs {
     #[serde(default)]
@@ -78,8 +80,9 @@ pub(super) fn tool(descriptions: &Descriptions) -> Tool {
     )
 }
 
-/// Only the name and the human description: a host may carry a token or an internal
-/// address, and the model has no use for either.
+// Only the name and the human description:
+// a host may carry a token or an internal address,
+// and the model has no use for either.
 fn hosts(workflows: &Workflows, descriptions: &Descriptions) -> String {
     let items: Vec<Json> = workflows
         .hosts()
@@ -119,8 +122,8 @@ fn host_workflows(workflows: &Workflows, host: &str, descriptions: &Descriptions
     .to_string()
 }
 
-/// The shape is fixed by `sim/trace.md` and stays minimal on purpose: fewer fields mean
-/// less for a model to copy wrong, and a drawn value is left out.
+// The shape is fixed by `sim/trace.md` and stays minimal on purpose:
+// fewer fields mean less for a model to copy wrong, and a drawn value is left out.
 fn detail(workflow: &Workflow) -> String {
     let params: Map<String, Json> = workflow
         .manifest
@@ -142,13 +145,15 @@ fn param_json(param: &Param) -> Json {
     let mut object = Map::new();
     object.insert("type".to_string(), Json::from(param.ty.as_str()));
 
-    // The wording never mentions random: a model cannot ask for randomness, it can
-    // only omit a parameter. The three "what if omitted" variants are mutually exclusive.
+    // The wording never mentions random:
+    // a model cannot ask for randomness, it can only omit a parameter.
+    // The three "what if omitted" variants are mutually exclusive.
     if param.required() {
         object.insert("required".to_string(), Json::Bool(true));
     } else if !param.hooks.is_empty() {
-        // The default is the marker that the hook fires on, not a value the model should
-        // copy: dropping the input is the template's business, not an argument.
+        // The default is the marker that the hook fires on,
+        // not a value the model should copy:
+        // dropping the input is the template's business, not an argument.
         object.insert("optional".to_string(), Json::Bool(true));
     } else if let Some(default) = &param.default {
         object.insert("default".to_string(), default.clone());
@@ -157,8 +162,8 @@ fn param_json(param: &Param) -> Json {
     }
 
     if let Some((min, max)) = param.range {
-        // Integer bounds are rendered as integers, float bounds keep their fraction: the
-        // numbers the model copies must be the numbers the workflow declared.
+        // Integer bounds are rendered as integers, float bounds keep their fraction:
+        // the numbers the model copies must be the numbers the workflow declared.
         let bounds = match param.ty {
             ParamType::Float => json!([min, max]),
             _ => json!([min as i64, max as i64]),
@@ -204,8 +209,8 @@ mod tests {
         let json = param_json(&p);
         assert_eq!(json["range"], json!([0i64, 9_007_199_254_740_991i64]));
         assert_eq!(json["optional"], json!(true));
-        // The word "random" is not for the model: it cannot ask for randomness, it can
-        // only omit a parameter.
+        // The word "random" is not for the model:
+        // it cannot ask for randomness, it can only omit a parameter.
         assert!(json.get("random").is_none());
     }
 

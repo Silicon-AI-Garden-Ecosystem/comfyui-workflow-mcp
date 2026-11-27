@@ -1,6 +1,7 @@
-//! The tool surface is two tools and three signatures: fewer fields for the model to copy
-//! means fewer ways to copy wrong. The server holds no state either, so every call
-//! re-reads the configuration and rescans the workflows directory.
+//! The tool surface is two tools and three signatures:
+//! fewer fields for the model to copy means fewer ways to copy wrong.
+//! The server holds no state either,
+//! so every call re-reads the configuration and rescans the workflows directory.
 
 mod run;
 mod search;
@@ -23,8 +24,9 @@ use crate::core::messages::{Messages, fill};
 pub async fn serve() -> ExitCode {
     let server = Server;
 
-    // `stdio()` and not `stdio_pipes()`: it works on Windows too and needs no pipe of our
-    // own. stdout carries protocol only, so every log line goes to stderr.
+    // `stdio()` and not `stdio_pipes()`:
+    // it works on Windows too and needs no pipe of our own.
+    // stdout carries protocol only, so every log line goes to stderr.
     match server.serve(stdio()).await {
         Ok(service) => match service.waiting().await {
             Ok(_) => ExitCode::SUCCESS,
@@ -42,7 +44,7 @@ pub async fn serve() -> ExitCode {
 
 pub(crate) struct Server;
 
-/// Each tool file brings its own router; the server hands out the merged one.
+// Each tool file brings its own router; the server hands out the merged one.
 fn router() -> ToolRouter<Server> {
     let mut router = Server::search_router();
     router.merge(Server::run_router());
@@ -51,10 +53,11 @@ fn router() -> ToolRouter<Server> {
 
 #[tool_handler(name = "comfyui-workflow-mcp", router = router())]
 impl ServerHandler for Server {
-    /// Hand-written because the wording is configuration: the tool descriptions and the
-    /// parameter help are injected from `[descriptions]`, so they can be tuned without
-    /// recompiling. A broken configuration falls back to the built-in text, read from the
-    /// same `sim/config.toml`.
+    // Hand-written because the wording is configuration:
+    // the tool descriptions and the parameter help are injected from `[descriptions]`,
+    // so they can be tuned without recompiling.
+    // A broken configuration falls back to the built-in text,
+    // read from the same `sim/config.toml`.
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -65,8 +68,8 @@ impl ServerHandler for Server {
             Err(_) => builtin_descriptions(),
         };
 
-        // Sorted by name, like the macro-generated list: repeated calls must hand the
-        // client the same order.
+        // Sorted by name, like the macro-generated list:
+        // repeated calls must hand the client the same order.
         let mut tools = vec![search::tool(&descriptions), run::tool(&descriptions)];
         tools.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -108,8 +111,9 @@ fn args_schema<T: JsonSchema + std::any::Any>(
     schema
 }
 
-/// An unknown name lists every available name: the number of hosts and workflows is single
-/// digit, so listing them beats fuzzy matching, which would quietly run a different workflow.
+// An unknown name lists every available name:
+// the number of hosts and workflows is single digit,
+// so listing them beats fuzzy matching, which would quietly run a different workflow.
 fn unknown_host(workflows: &Workflows, name: &str, messages: &Messages) -> String {
     let names: Vec<&str> = workflows
         .hosts()

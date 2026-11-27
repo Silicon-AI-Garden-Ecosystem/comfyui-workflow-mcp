@@ -1,6 +1,7 @@
-//! Every word the model reads lives in `[messages]`, next to the descriptions: the same
-//! configuration that names the tools also owns their failures. Nothing here is a default —
-//! `builtin()` reads the compiled-in `sim/config.toml`, so the file stays the only source.
+//! Every word the model reads lives in `[messages]`, next to the descriptions:
+//! the same configuration that names the tools also owns their failures.
+//! Nothing here is a default — `builtin()` reads the compiled-in `sim/config.toml`,
+//! so the file stays the only source.
 
 use std::sync::OnceLock;
 

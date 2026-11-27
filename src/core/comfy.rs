@@ -1,7 +1,7 @@
-//! The wire protocol is mirrored, not modelled: a submit counts as success only when
-//! ComfyUI answered 200 with empty `node_errors`, and its error bodies are forwarded
-//! unchanged (measured, see `docs/probe.md`). The address comes from `env.toml`, never from
-//! the tool arguments.
+//! The wire protocol is mirrored, not modelled:
+//! a submit counts as success only when ComfyUI answered 200 with empty `node_errors`,
+//! and its error bodies are forwarded unchanged (measured, see `docs/probe.md`).
+//! The address comes from `env.toml`, never from the tool arguments.
 
 use serde_json::Value as Json;
 
@@ -69,17 +69,18 @@ pub struct RemoteFile {
 }
 
 impl Client {
-    /// Rebuilt for every call rather than cached: the TLS behaviour rides on the URL
-    /// scheme, so a client must not outlive a configuration change.
+    /// Rebuilt for every call rather than cached:
+    /// the TLS behaviour rides on the URL scheme,
+    /// so a client must not outlive a configuration change.
     pub fn new(base_url: &str) -> Result<Self, ComfyError> {
-        // reqwest 0.13 panics in `build()` unless its crypto provider is installed;
+        // reqwest 0.13 panics in `build()` unless its crypto provider is installed,
         // installing it twice returns Err, which is harmless here.
         let _ = rustls::crypto::ring::default_provider().install_default();
 
         let mut builder = reqwest::Client::builder().tls_backend_rustls();
 
-        // reqwest loads the platform root certificates while building the client, even
-        // for plain http: without /etc/ssl/certs (nix sandbox) that build fails outright.
+        // reqwest loads the platform root certificates while building the client,
+        // even for plain http: without /etc/ssl/certs (nix sandbox) that build fails outright.
         if !is_https(base_url) {
             builder = builder.tls_danger_accept_invalid_certs(true);
         }
@@ -123,8 +124,9 @@ impl Client {
         Ok(format!("ComfyUI {version}"))
     }
 
-    /// `HEAD` answers 200/404 with no body (measured), so a file that ComfyUI already
-    /// holds costs one round trip and zero bytes; anything else means a proxy is in the way.
+    /// `HEAD` answers 200/404 with no body (measured),
+    /// so a file that ComfyUI already holds costs one round trip and zero bytes,
+    /// anything else means a proxy is in the way.
     pub async fn has_input(&self, name: &str) -> Result<bool, ComfyError> {
         let response = self
             .http
@@ -148,8 +150,9 @@ impl Client {
         }
     }
 
-    /// The multipart part's filename is the only thing that decides the stored name; the
-    /// `filename` form field is ignored (measured). `overwrite` keeps uploads idempotent,
+    /// The multipart part's filename is the only thing that decides the stored name,
+    /// the `filename` form field is ignored (measured).
+    /// `overwrite` keeps uploads idempotent,
     /// and the returned name is still authoritative: ComfyUI suffixes on a collision.
     pub async fn upload_input(&self, name: &str, bytes: Vec<u8>) -> Result<String, ComfyError> {
         let form = reqwest::multipart::Form::new()
@@ -195,8 +198,9 @@ impl Client {
         }
     }
 
-    /// A 200 alone is not success: the measured rule is HTTP 200 *and* empty
-    /// `node_errors`; a validation failure is a 400 whose body is forwarded unchanged.
+    /// A 200 alone is not success:
+    /// the measured rule is HTTP 200 *and* empty `node_errors`,
+    /// a validation failure is a 400 whose body is forwarded unchanged.
     pub async fn submit(&self, prompt: &Json, client_id: &str) -> Result<SubmitOk, ComfyError> {
         let payload = serde_json::json!({ "prompt": prompt, "client_id": client_id });
         let response = self
@@ -300,8 +304,8 @@ impl Client {
     }
 
     pub async fn download(&self, file: &RemoteFile) -> Result<Vec<u8>, ComfyError> {
-        // Real ComfyUI file names contain non-ASCII characters, and a raw query would
-        // 400 the request line; `.query()` percent-encodes them.
+        // Real ComfyUI file names contain non-ASCII characters,
+        // and a raw query would 400 the request line, `.query()` percent-encodes them.
         let response = self
             .http
             .get(self.url("/view"))
@@ -349,8 +353,8 @@ impl Client {
     }
 }
 
-/// Non-200 handling: a JSON body is forwarded verbatim, anything else is cut to 500
-/// bytes so that a proxy's HTML page never becomes the model's context.
+// Non-200 handling: a JSON body is forwarded verbatim,
+// anything else is cut to 500 bytes so that a proxy's HTML page never becomes the model's context.
 fn json_error(stage: Stage, status: u16, body: &str) -> ComfyError {
     match serde_json::from_str::<Json>(body) {
         Ok(value) => ComfyError::Raw {
@@ -369,8 +373,9 @@ fn pretty(value: &Json) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
-/// `outputs` mixes images, dims and text; only objects with a `filename` are
-/// downloadable, and `type=output` wins over `temp` so no image is fetched twice.
+/// `outputs` mixes images, dims and text,
+/// only objects with a `filename` are downloadable,
+/// and `type=output` wins over `temp` so no image is fetched twice.
 pub fn collect_files(outputs: &Json) -> Vec<RemoteFile> {
     let mut found = Vec::new();
 
@@ -424,8 +429,8 @@ fn is_https(url: &str) -> bool {
     url.len() >= 8 && url[..8].eq_ignore_ascii_case("https://")
 }
 
-/// reqwest's own Display is only "builder error" or "error sending request"; the
-/// actionable detail (missing root certificates, connection refused, DNS) is in the chain.
+// reqwest's own Display is only "builder error" or "error sending request",
+// the actionable detail (missing root certificates, connection refused, DNS) is in the chain.
 fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
     let mut out = err.to_string();
     let mut cur = err.source();

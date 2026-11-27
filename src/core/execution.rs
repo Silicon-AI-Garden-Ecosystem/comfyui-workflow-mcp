@@ -1,6 +1,8 @@
-//! One run is one directory of artifacts, and the path of that directory is the whole
-//! answer. The server keeps no queue, no lock and no run state: ComfyUI serializes its
-//! own queue, and a second scheduler could only ever disagree with it.
+//! One run is one directory of artifacts,
+//! and the path of that directory is the whole answer.
+//! The server keeps no queue, no lock and no run state:
+//! ComfyUI serializes its own queue,
+//! and a second scheduler could only ever disagree with it.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -21,8 +23,9 @@ use crate::core::output;
 use crate::core::overrides;
 use crate::core::overrides::FileSlot;
 
-/// comfyui serializes its own queue; four uploads in flight is enough to hide latency
-/// without flooding a server that may be running on the same machine.
+// comfyui serializes its own queue,
+// four uploads in flight is enough to hide latency,
+// without flooding a server that may be running on the same machine.
 const UPLOAD_CONCURRENCY: usize = 4;
 
 #[derive(Debug)]
@@ -31,14 +34,15 @@ pub enum RunError {
     Comfy(ComfyError),
     /// Independent failures: pre-flight checks report all of them at once, not the first.
     Multiple(Vec<String>),
-    /// The whole run is bounded by one deadline: a stalled connection must not outlive the
-    /// configured limit just because it is not the polling loop.
+    /// The whole run is bounded by one deadline:
+    /// a stalled connection must not outlive the configured limit,
+    /// just because it is not the polling loop.
     Timeout {
         stage: String,
         seconds: u64,
     },
-    /// The workflow JSON lost a field the manifest pointed at, which can only happen if the
-    /// file changed after it was loaded.
+    /// The workflow JSON lost a field the manifest pointed at,
+    /// which can only happen if the file changed after it was loaded.
     MissingField(String),
     Io {
         path: PathBuf,
@@ -47,8 +51,9 @@ pub enum RunError {
 }
 
 impl RunError {
-    /// Every branch defers to `[messages]`; the legacy `Display` below uses the builtin copy so
-    /// logs and the tests that predate the table keep their exact wording.
+    /// Every branch defers to `[messages]`,
+    /// the legacy `Display` below uses the builtin copy,
+    /// so logs and the tests that predate the table keep their exact wording.
     pub fn render(&self, messages: &Messages) -> String {
         let run = &messages.run;
         match self {
@@ -95,8 +100,8 @@ impl From<std::io::Error> for RunError {
     }
 }
 
-/// Only the directory comes back; a drawn value stays in the artifacts, not in the
-/// response.
+/// Only the directory comes back,
+/// a drawn value stays in the artifacts, not in the response.
 pub async fn execute(
     client: &Client,
     workflow: &Workflow,
@@ -118,8 +123,8 @@ pub async fn execute(
         &mut overrides::os_rng(),
     )?;
 
-    // Uploads run before the run directory exists: a missing or unreadable local file must
-    // not leave an empty directory behind.
+    // Uploads run before the run directory exists:
+    // a missing or unreadable local file must not leave an empty directory behind.
     let names = phase(
         deadline,
         timeout,
@@ -136,10 +141,11 @@ pub async fn execute(
         .unwrap_or(1);
     let client_id = format!("comfyui-workflow-mcp-{nanos:x}");
 
-    // The server picks the path and writes the workflow before the submit: ComfyUI's
-    // history disappears on restart, and a rejected submit must leave the evidence behind.
-    // One directory per host and workflow: two hosts may well have a workflow of the same
-    // name, and their artifacts must not mix.
+    // The server picks the path and writes the workflow before the submit:
+    // ComfyUI's history disappears on restart,
+    // and a rejected submit must leave the evidence behind.
+    // One directory per host and workflow:
+    // two hosts may well have a workflow of the same name, and their artifacts must not mix.
     let host_root = root.join(&workflow.host);
     let dir =
         output::create_run_dir(&host_root, &workflow.name, SystemTime::now()).map_err(|err| {
@@ -224,9 +230,11 @@ pub async fn execute(
     Ok(dir)
 }
 
-/// Uploading is content-addressed: identical bytes always get the same name, so one file
-/// named by two parameters is hashed once and uploaded once. Hashing finishes before any
-/// upload starts, so a local problem is reported without touching the network.
+// Uploading is content-addressed:
+// identical bytes always get the same name,
+// so one file named by two parameters is hashed once and uploaded once.
+// Hashing finishes before any upload starts,
+// so a local problem is reported without touching the network.
 async fn upload_files(
     client: &Client,
     files: &[FileSlot],
@@ -276,8 +284,8 @@ async fn upload_files(
     }
 }
 
-/// One content can be named by several parameters, so the lookup must not consume the entry
-/// the next pointer needs.
+// One content can be named by several parameters,
+// so the lookup must not consume the entry the next pointer needs.
 fn attach_names(
     located: &[(String, PathBuf, String)],
     stored_by_name: &HashMap<String, String>,
@@ -294,7 +302,7 @@ fn attach_names(
     (named, failures)
 }
 
-/// One entry per distinct content name, in the order the parameters asked for them.
+// One entry per distinct content name, in the order the parameters asked for them.
 fn unique_files(located: &[(String, PathBuf, String)]) -> Vec<(String, PathBuf)> {
     let mut unique: Vec<(String, PathBuf)> = Vec::with_capacity(located.len());
     for (_, path, name) in located {
@@ -385,8 +393,9 @@ async fn poll(
     }
 }
 
-/// Every network phase shares one deadline: the configured limit is a promise about the
-/// whole run, not about the polling loop alone.
+// Every network phase shares one deadline:
+// the configured limit is a promise about the whole run,
+// not about the polling loop alone.
 async fn phase<T, E>(
     deadline: Instant,
     timeout: Duration,

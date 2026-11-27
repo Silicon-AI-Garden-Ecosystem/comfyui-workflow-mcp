@@ -1,6 +1,7 @@
-//! stdout carries the MCP protocol, so every record goes to stderr and to
-//! `<logs_dir>/server.log`. MCP clients often hide the child's stderr, so the file is
-//! the only place where the reason for a failure survives.
+//! stdout carries the MCP protocol,
+//! so every record goes to stderr and to `<logs_dir>/server.log`.
+//! MCP clients often hide the child's stderr,
+//! so the file is the only place where the reason for a failure survives.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -15,8 +16,9 @@ pub fn init(logs_dir: &Path, level: LevelFilter) {
     let file = log_file(logs_dir).map(|file| Arc::new(Mutex::new(file)));
     let make = move || Tee { file: file.clone() };
 
-    // Only this crate's records pass the filter: at the default level rmcp prints every
-    // handshake structure in full, which is debug noise rather than user-facing output.
+    // Only this crate's records pass the filter:
+    // at the default level rmcp prints every handshake structure in full,
+    // which is debug noise rather than user-facing output.
     let filter = tracing_subscriber::filter::Targets::new()
         .with_target(env!("CARGO_CRATE_NAME"), level)
         .with_default(LevelFilter::WARN);
@@ -39,7 +41,7 @@ pub fn init(logs_dir: &Path, level: LevelFilter) {
     }
 }
 
-/// Falls back to stderr when the file cannot be opened: logging must never block startup.
+// Falls back to stderr when the file cannot be opened: logging must never block startup.
 fn log_file(dir: &Path) -> Option<File> {
     fs::create_dir_all(dir).ok()?;
     OpenOptions::new()
@@ -60,8 +62,8 @@ pub fn parse_level(raw: &str) -> LevelFilter {
     }
 }
 
-/// One record, two sinks; `O_APPEND` keeps concurrent servers (one per agent) from
-/// truncating each other's lines.
+// One record, two sinks,
+// `O_APPEND` keeps concurrent servers (one per agent) from truncating each other's lines.
 struct Tee {
     file: Option<Arc<Mutex<File>>>,
 }
