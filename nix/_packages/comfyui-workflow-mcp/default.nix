@@ -5,11 +5,11 @@
 
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "comfyui-workflow-mcp";
-  version = "0.3.0";
+  version = "0.4.0";
 
   src = ../../..;
 
-  cargoHash = "sha256-s1HAD6K1g1Nec3UBpDxJi8Ql8ZmVyGcNQMScGueRkMc=";
+  cargoHash = "sha256-JlfjMV8sP0wjJ80ijFWwesLmZoDvOINyyhnsZFFPtoI=";
 
   doCheck = true;
 
