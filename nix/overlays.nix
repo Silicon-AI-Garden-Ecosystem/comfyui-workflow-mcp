@@ -1,5 +1,6 @@
 {
   config,
+  inputs,
   ...
 }:
 {
@@ -9,10 +10,15 @@
 
   perSystem =
     {
-      inputs',
+      system,
       ...
     }:
     {
-      _module.args.pkgs = inputs'.nixpkgs.legacyPackages.extend config.flake.overlays.default;
+      _module.args.pkgs = import inputs.nixpkgs {
+        inherit system;
+        overlays = [
+          config.flake.overlays.default
+        ];
+      };
     };
 }
